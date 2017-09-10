@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <malloc.h>
 #include <assert.h>
+#include <intrin.h>
 
 //TODO
 //normalize non-UTF characters:
@@ -12,376 +13,273 @@
 namespace utf8util
 {
 
-	//set default memory allocation functions
-	struct allocator
-	{
-		static void* allocate(size_t size) { return ::malloc(size); };
-		static void free(void* ptr) { return ::free(ptr); };
-	};
-
-	namespace list
-	{
-
-		template<typename T>
-		class Node
-		{
-		public:
-			typedef T value_type;
-		private:
-			Node*      _next;
-			Node*      _prev;
-			value_type _value;
-		};
-
-		template<typename T>
-		class List
-		{
-		public:
-			typedef T value_type;
-			typedef T& ref_value_type;
-			typedef const T const_value_type;
-			typedef const T& const_ref_value_type;
-			typedef Node<T>    node_type;
-			typedef node_type* node_pointer;
-
-			List() :_head(0), _tail(0) {};
-
-			//append to end
-			void* push(const_ref_value_type item)
-			{
-				node_pointer node = new node_type;
-				if (!node) return 0;//on error
-				node->_next = 0;
-				node->_prev = _tail;
-				memcpy(&node->_value, &item, sizeof(value_type));
-				if (_head == 0)
-				{
-					_head = node;
-				}
-				else
-				{
-					_tail->_next = node;
-				}
-				_tail = node;
-				return node;
-			};
-			void remove_item(node_pointer p)
-			{
-				if (p == _head)
-				{
-					_head = _head->_next;
-					_head->_prev = 0;
-				}
-				else if (p == _tail)
-				{
-					_tail = _tail->_prev;
-					_tail->_next = 0;
-				}
-				else
-				{
-					p->_prev->_next = p->_next;
-					p->_next->_prev = p->_prev;
-				}
-				delete p;
-			}
 
 
-
-			//get
-			void* pop(ref_value_type item)
-			{
-				node_pointer node = new node_type;
-				if (!node) return 0;//on error
-				node->_next = 0;
-				node->_prev = _tail;
-				memcpy(&node->_value, &item, sizeof(value_type));
-				if (_head == 0)
-				{
-					_head = node;
-				}
-				else
-				{
-					_tail->_next = node;
-				}
-				_tail = node;
-				return node;
-			}
-
-		private:
-			node_pointer _head, _tail;
-		};
-	}
-
-
-
-
+	//LogBase2 ~ 26 sec
+	//int LogBase2_32(uint32_t n) { static const int table[32] = { 0,  9,  1, 10, 13, 21,  2, 29, 11, 14, 16, 18, 22, 25,  3, 30, 8, 12, 20, 28, 15, 17, 24,  7, 19, 27, 23,  6, 26,  5,  4, 31 }; n |= n >> 1; n |= n >> 2; n |= n >> 4; n |= n >> 8; n |= n >> 16; return n ? table[(n * 0x07C4ACDD) >> 27] : -1; };
+	//inline int LogBase2_64(uint64_t n) { static const int table[64] = { 0, 58, 1, 59, 47, 53, 2, 60, 39, 48, 27, 54, 33, 42, 3, 61, 51, 37, 40, 49, 18, 28, 20, 55, 30, 34, 11, 43, 14, 22, 4, 62, 57, 46, 52, 38, 26, 32, 41, 50, 36, 17, 19, 29, 10, 13, 21, 56, 45, 25, 31, 35, 16, 9, 12, 44, 24, 15, 8, 23, 7, 6, 5, 63 }; n |= n >> 1; n |= n >> 2; n |= n >> 4; n |= n >> 8; n |= n >> 16; n |= n >> 32; return n ? table[(n * 0x03F6EAF2CD271461) >> 58] : -1; };
+	//ilog2 ~ 13 sec
+	//inline int ilog2_32(uint32_t x) { unsigned long index; return _BitScanForward(&index, x) ? index : -1; };
+	//inline int ilog2_64(uint64_t x) { register unsigned long index; return _BitScanForward64(&index, x) ? index : -1; };
+	//ilog2_generic ~ 24 sec
+	//inline int ilog2_generic_64(register uint64_t x)
+	//{
+	//	register uint64_t r = 0;
+	//	if (x >= 1LL << 32) { x >>= 32; r |= 32; }
+	//	if (x >= 1LL << 16) { x >>= 16; r |= 16; }
+	//	if (x >= 1LL << 8) { x >>= 8; r |= 8; }
+	//	if (x >= 1LL << 4) { x >>= 4; r |= 4; }
+	//	if (x >= 1LL << 2) { x >>= 2; r |= 2; }
+	//	if (x >= 1LL << 1) r |= 1;
+	//	return x ? (int)r : -1;
+	//};
+	//fast_log2 ~ 9 sec
+	inline int fast_log2(register double x) { return (reinterpret_cast<uint64_t&>(x) >> 52) - 1023; };
+	//inline int fast_log2(register double x) { return ((reinterpret_cast<uint64_t&>(x) >> 52) & 2047) - 1023; };
+	//inline int float_log2(float x) { return ((*reinterpret_cast<uint32_t*>(&x) >> 23) & 255) - 127; };
 
 	namespace memory
 	{
 
+		//set default memory allocation functions
+		struct allocator
+		{
+			static void* malloc(size_t size) { return ::malloc(size); };
+			static void free(void* ptr) { return ::free(ptr); };
+		};
+
 		//All data blocks inside pages have data_alignment = sizeof(void*) = 4 bytes (x86-32) or 8 bytes (x86-64).
-		//data_size_bits: 12..15, number bits of data_header {size} and {prev_size} fields.
-		//max_page_size = 2^14...2^17 bytes (x86-32) or 2^15...2^18 bytes (x86-64).
-		//For data sizes > max_page_size, allocated new page without unused block.
-		//All pages have end_header at end of page.
-		//page structure:
-		//        |page header    |unused|data header 0 | data block 0 |data header 1 | data block 1 | ... |data header n | unused block   |end header |
-		//x86-32: |4+4+2=10 bytes |  2   | 4 bytes      |              |  4 bytes     |              | ... | 4 bytes      |                | 4 bytes   |
-		//x86-64: |8+8+2=18 bytes |  2   | 4 bytes      |              |  4 bytes     |              | ... | 4 bytes      |                | 4 bytes   |
-		//        |-------------------------------------|-----------------------------|-----------------------------------|----------------------------|
-		//   ptr: |page_ptr                             |ptr0                         |ptr1                               |page_ptr +                  |page_ptr +
-		//        |                                     |                             |                                   | last_offset*data_alignment | default_page_size
-		//        --------------------------------------------------------------------------------------------------------------------------------------
+		//Data structure:
+		//        | page header   | data header 0 | data block 0 | data header 1 | data block 1 | ... |data header n | unused block   |last data header |
+		//x86-32: | 32*4=128 bytes| 2*4=8 bytes   |              |   8 or 16     |              | ... |  8 or 16     |                |    8 or 16      |
+		//x86-64: | 32*8=256 bytes| 2*8=16 bytes  |              |    bytes      |              | ... |   bytes      |                |      bytes      |
+		//        |-------------------------------|------------------------------|-----------------------------------|----------------|-----------------|
+		//   ptr: |page_ptr                       |ptr0                          |ptr1                               |                |                 |page_ptr +
+		//        |                               |                              |                                   |                |                 | page_size
+		//        --------------------------------------------------------------------------------------------------------------------------------------|
+		//
+		//????
+		//For data sizes <= 16 bytes (x86-32) or 32 bytes (x86-64), allocated one block 384 + 4096 bytes.
+		//Number blocks = 1024 blocks.
+		//First  level - blocks busy bits. Occupy 1bit*1024 = 128 bytes.
+		//Second level - blocks sizes by 2 bits =>
+		//       00 -> 4 bytes, 01 -> 8 bytes, 10 -> 12 bytes, 11 -> 16 bytes. Occupy 2bit*1024 = 256 bytes.
+		//Total header size = 128 + 256 = 384 bytes.
+		//Total data size   = 1024 * 4 bytes = 4096 bytes.
 
 
 
+//#ifdef _WIN64
+//# define DATA_PTR (uint64_t*)
+//#else
+//# define DATA_PTR (uint32_t*)
+//#endif
 
-		//data_size_bits: 12..15, number bits of size and prev_size data_header fields
-#define data_size_bits       12U
-#define data_size_mask       ((1U << data_size_bits) - 1U)
+		//enum data_constant
+		//{
+		//	data_alignment = sizeof(void*),
+		//	data_alignment_mask = ~(data_alignment - 1),
+		//	data_header_offset = offsetof(struct data_header, next_unused),
+		//	page_header_bytes = sizeof(struct page_header),
+		//	unused_header_bytes = sizeof(struct data_header) - offsetof(struct data_header, next_unused),
+		//	min_block_size = sizeof(struct data_header)
+		//};
+
 #define data_alignment       sizeof(void*)
-#define max_page_size	     (data_alignment << data_size_bits)
-#define default_page_size    max_page_size
+#define data_alignment_mask  ~(data_alignment - 1)
+#define data_header_offset   offsetof(struct data_header, next_unused)
+#define unused_header_bytes  (sizeof(struct data_header) - data_header_offset)
+#define page_header_bytes    sizeof(struct page_header)
+#define min_block_size       sizeof(struct data_header)
 
-#define page_header_bytes    (sizeof(void*)*2 + 4)
-#define data_header_bytes    sizeof(uint32_t)
-#define ptr0_offset          ((page_header_bytes + data_header_bytes + data_alignment - 1) & ~(data_alignment - 1))
-		
+#define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
+
 		struct page_header
 		{
-			void* next;
-			void* prev;
-			uint16_t last_offset;//offset to the last unused block (in data_alignment units)
-			uint8_t u[2];//unused
+			struct data_header* unused_ptr[32]; //offsets to first unused block ordered by size
 		};
-		//struct data_header{ uint32_t d; };
-		struct data_header_fields
+		struct data_header
 		{
-			uint8_t  busy_bit;  //1 - data block is busy, 0 - data block is unused block
-			uint16_t size;      //size of data block (in data_alignment units), low data_size_bits
-			uint16_t prev_size; //size of previous data block (in data_alignment units), low data_size_bits
+			size_t size; //block size, 0 bit is busy_bit: 1 - data block is busy, 0 - data block is unused block
+			struct data_header* prev; //ptr to previuos data block
+			struct data_header* next_unused; //ptr to next unused block
+			struct data_header* prev_unused; //ptr to previous unused block
 		};
+
 		class page_manager
 		{
 		public:
-			page_manager() :_first(0), _last(0) {};
-			inline void packed_to_data_header_fields(const void* ptr, data_header_fields* pdh)
+			page_manager() : _pool_ptr(0), _pool_size(0) {};
+			bool create_with_pool(void* pool, size_t size)
 			{
-				uint32_t c = *reinterpret_cast<const uint32_t*>(static_cast<const uint8_t*>(ptr) - data_header_bytes);
-				pdh->size = c & data_size_mask;
-				pdh->prev_size = (c >> data_size_bits) & data_size_mask;
-				pdh->busy_bit = (c >> (data_size_bits * 2 + 0)) & 1;
-			};
-			inline void data_header_fields_to_packed(const data_header_fields* pdh, void* ptr)
-			{
-				*reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(ptr) - data_header_bytes) =
-					(pdh->busy_bit & 1) << (data_size_bits * 2 + 0) |
-					(pdh->prev_size & data_size_mask) << data_size_bits |
-					(pdh->size & data_size_mask);
-			};
-			void* init()
-			{
-				if (_first) destroy();
-				if (page_append(default_page_size) == 0)return 0;
+				_pool_ptr = 0;
+				_pool_size = 0;
+				if (pool == 0
+					|| size < (page_header_bytes + data_header_offset + min_block_size)
+					|| (reinterpret_cast<size_t>(pool) & (data_alignment - 1)) != 0
+					|| (data_alignment & (data_alignment - 1)) != 0)return 0;
+				_pool_ptr = static_cast<page_header*>(pool);
+				_pool_size = size & data_alignment_mask;
+
+				::memset(_pool_ptr, 0, sizeof(page_header));
+
 				//init first data_header
-				data_header_fields dhf;
-				dhf.size = (default_page_size - ptr0_offset) / data_alignment;
-				dhf.prev_size = 0;
-				dhf.busy_bit = 0;
-				data_header_fields_to_packed(&dhf, static_cast<uint8_t*>(_first) + ptr0_offset);
-				//init end_page data_header
-				dhf.prev_size = dhf.size;
-				dhf.size = 0;
-				dhf.busy_bit = 0;
-				data_header_fields_to_packed(&dhf, static_cast<uint8_t*>(_first) + default_page_size);
-				static_cast<page_header*>(_last)->last_offset = ptr0_offset / data_alignment;
-				return _first;
+				data_header* p = cast_data_header(_pool_ptr, page_header_bytes);
+				p->size = _pool_size - page_header_bytes - data_header_offset;
+				p->prev = 0;
+				link_unused_block(p);
+				//init last data_header at end pool
+				data_header* p_last = cast_data_header(p, p->size);
+				p_last->size = 0;
+				p_last->prev = p;
+				return true;
 			};
-			void destroy()
+			size_t get_used_size()
 			{
-				while (_first)
+				data_header *p = cast_data_header(_pool_ptr, page_header_bytes);
+				size_t size, total = page_header_bytes + data_header_offset;
+				while (p && p->size)
 				{
-					void* p = _first;
-					_first = static_cast<page_header*>(_first)->next;
-					allocator::free(p);
+					size = p->size & data_alignment_mask;
+					if (p->size & 1)total += size;
+					p = cast_data_header(p, size);
 				}
-				_first = _last = 0;
+				return total;
 			};
-			void* page_append(size_t size)
+		private:
+			inline data_header** get_first_unused_block_by_size(register size_t size)
+			{
+				//index = ilog2(size)
+				register union { double d; int64_t i; }v = { (double)size };
+				v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0;
+				return &_pool_ptr->unused_ptr[v.i];
+			};
+			void unlink_unused_block(data_header* p)
+			{
+				data_header* *pu = get_first_unused_block_by_size(p->size);
+				if (p->prev_unused)
+					p->prev_unused->next_unused = p->next_unused;
+				if (p->next_unused)
+					p->next_unused->prev_unused = p->prev_unused;
+				if (p->prev_unused == 0)
+					*pu = p->next_unused;
+			};
+			void link_unused_block(data_header* p)
+			{
+				p->next_unused = 0;
+				p->prev_unused = 0;
+				p->size &= data_alignment_mask;
+				data_header* *pu = get_first_unused_block_by_size(p->size);
+				if (*pu) 
+				{
+					(*pu)->prev_unused = p;
+					p->next_unused = *pu;
+				}
+				*pu = p;
+			};
+			data_header* find_unused_block(size_t size)
+			{
+				data_header
+					*p = 0,
+					**pu = get_first_unused_block_by_size(size),
+					**end = &_pool_ptr->unused_ptr[32];
+				while (1)
+				{
+					if (p == 0)
+					{
+						while (pu < end && *pu == 0)pu++;
+						if (pu >= end) return 0;
+					}
+					p = *pu;
+					if (p->size >= size) break;
+					p = p->next_unused;
+				}
+				return p;
+			};
+		public:
+			void* malloc(size_t size)
 			{
 				if (size == 0)return 0;
-				page_header* p = static_cast<page_header*>(allocator::allocate(size));
+
+				//align size
+				size_t size_aligned = (size + data_header_offset + data_alignment - 1) & data_alignment_mask;
+
+				//find unused block
+				data_header* p = find_unused_block(size_aligned);
 				if (p == 0)return 0;
-				p->next = 0;
-				p->prev = 0;
-				p->last_offset = 0;
-				if (_first == 0)
+
+				//unlink unused block
+				unlink_unused_block(p);
+				
+				size_t unused = p->size;
+
+				//!!!here you can set the margin for the data block
+				if (unused < unused_header_bytes)
 				{
-					_first = p;
+					//если в unused нельзя вместить unused_header,
+					//то весь unused block выделим для data block
+
+					//set new data block
+					p->size = unused | 1;
 				}
 				else
 				{
-					p->prev = _last;
-					static_cast<page_header*>(_last)->next = p;
-				}
+					//если в unused можно вместить unused_header,
+					//то выделим в нем data block, а оставшееся
+					//простанство установим как unused block
 
-				_last = p;
-				return p;
-			}
-			void page_remove(void* page_ptr)
-			{
-				if (page_ptr == 0)return;
-				page_header* p = static_cast<page_header*>(page_ptr);
-				if (p->prev != 0) static_cast<page_header*>(p->prev)->next = p->next;
-				if (p->next != 0) static_cast<page_header*>(p->next)->prev = p->prev;
-				if (p->prev == 0)_first = p->next;
-				if (p->next == 0)_last = p->prev;
-				allocator::free(page_ptr);
-			};
-			void* allocate(size_t size)
-			{
-				if (size == 0)return 0;
+					//set new data block
+					p->size = size_aligned | 1;
 
-				data_header_fields dhf;
-				page_header* last_page;
-				void* ptr;
-
-
-				size_t size_aligned = (size + data_header_bytes + data_alignment - 1) & ~(data_alignment - 1);
-
-				//проверим: если size > default_page_size, то выделим новую страницу с таким size
-				if (size_aligned > default_page_size - ptr0_offset)
-				{
-					//append new page without unused blocks
-					if (page_append(size_aligned + ptr0_offset) == 0)return 0;
-					last_page = static_cast<page_header*>(_last);
-					//for page without unused blocks: last_offset=0, size=prev_size=0, busy_bit=1
-					last_page->last_offset = 0; 
-					dhf.size = 0;
-					dhf.prev_size = 0;
-					dhf.busy_bit = 1;
-					ptr = static_cast<uint8_t*>(_last) + ptr0_offset;
-					data_header_fields_to_packed(&dhf, ptr);
-					return ptr;
-				}
-
-				//skip pages without unused blocks
-				last_page = static_cast<page_header*>(_last);
-				while (last_page->last_offset == 0)
-					last_page = static_cast<page_header*>(last_page->prev);
-
-				//скорректируем last_offset, если слева от него есть unused block
-				while (1)
-				{
-					packed_to_data_header_fields(reinterpret_cast<uint8_t*>(last_page) + last_page->last_offset*data_alignment, &dhf);
-					if (dhf.busy_bit == 1 || dhf.prev_size == 0)break;
-					last_page->last_offset -= dhf.prev_size;
-				}
-				if (dhf.busy_bit == 1)
-				{
-					last_page->last_offset += dhf.size;
-					packed_to_data_header_fields(reinterpret_cast<uint8_t*>(last_page) + last_page->last_offset*data_alignment, &dhf);
-				}
-
-				//get unused block size
-				size_t unused = default_page_size - last_page->last_offset*data_alignment;
-				assert(unused == dhf.size*data_alignment);
-				if (size_aligned > unused)
-				{
-					//create new page
-					if (page_append(default_page_size) == 0)return 0;
-					last_page = static_cast<page_header*>(_last);
-					last_page->last_offset = ptr0_offset / data_alignment;
 					//set new unused block
-					dhf.size = (default_page_size - ptr0_offset)/data_alignment;
-					dhf.prev_size = 0;
-					dhf.busy_bit = 0;
-				}
+					data_header* p_new = cast_data_header(p, size_aligned);
+					p_new->size = unused - size_aligned;
+					p_new->prev = p;
+					//link unused block
+					link_unused_block(p_new);
 
-				//allocate new block in unused block
-				uint16_t prev_size = dhf.size;
-				dhf.size = static_cast<uint16_t>(size_aligned / data_alignment);
-				dhf.busy_bit = 1;
-				ptr = reinterpret_cast<uint8_t*>(last_page) + last_page->last_offset*data_alignment;
-				data_header_fields_to_packed(&dhf, ptr);
-				//set new unused block
-				last_page->last_offset += dhf.size;
-				dhf.prev_size = dhf.size;
-				dhf.size = prev_size - dhf.size;
-				dhf.busy_bit = 0;
-				data_header_fields_to_packed(&dhf, reinterpret_cast<uint8_t*>(last_page) + last_page->last_offset*data_alignment);
-				//set end_page header
-				assert((last_page->last_offset + dhf.size)*data_alignment == default_page_size);
-				dhf.prev_size = dhf.size;
-				dhf.size = 0;
-				dhf.busy_bit = 0;
-				data_header_fields_to_packed(&dhf, reinterpret_cast<uint8_t*>(last_page) + default_page_size);
-				return ptr;
+					//update prev_size of next data block
+					data_header* p_next = cast_data_header(p, unused);
+					p_next->prev = p_new;
+				}
+				return reinterpret_cast<uint8_t*>(p) + data_header_offset;
 			};
-			void deallocate(void* ptr)
+			void free(void* ptr)
 			{
 				assert(ptr != 0);
 				if (ptr == 0)return;
-
 				
-				//set busy_bit = 0
-				data_header_fields dhf, *pdhf = &dhf;
-				packed_to_data_header_fields(ptr, pdhf);
-				assert(pdhf->busy_bit == 1);//can free only block with busy_bit == 1
-				pdhf->busy_bit = 0;
-				data_header_fields_to_packed(pdhf, ptr);
+				data_header *p = cast_data_header(ptr, -ptrdiff_t(data_header_offset));
 
-				//free page without unused block
-				if (pdhf->size == 0)
+				//!!! при такой стратегии слева и справа от data block
+				//!!! может быть только один unused block
+
+				size_t unused = p->size & data_alignment_mask;
+				assert(unused > 0);
+
+				data_header* p_next = cast_data_header(p, unused);
+				if ((p_next->size & 1) == 0)
 				{
-					assert(pdhf->prev_size == 0);
-					page_remove(reinterpret_cast<page_header*>(static_cast<uint8_t*>(ptr) - ptr0_offset));
-					return;
+					unlink_unused_block(p_next);
+					unused += p_next->size;
 				}
-
-				//!!! нам неизвестно положение page_header{ last_offset },
-				//поэтому объединять соседние освобожденные блоки будем,
-				//потому что в заголовке, на который указывает last_offset,
-				//после объединения сохраниться prev_size и
-				//при первой же возможности можно легко исправить last_offset.
-				data_header_fields dhf0, *pdhf0 = &dhf0, *pdhf_temp;
-				uint8_t *p = static_cast<uint8_t*>(ptr);
-				//объединим пространства слева
-				// здесь просто смещаем указатель влево до тех пор,
-				// пока встречаются освобождённые блоки слева
-				while (pdhf->prev_size > 0)
+				if (p->prev && (p->prev->size & 1) == 0)
 				{
-					packed_to_data_header_fields(p - pdhf->prev_size*data_alignment, pdhf0);
-					if (pdhf0->busy_bit == 1) break;
-					p -= pdhf->prev_size*data_alignment;
-					pdhf_temp = pdhf; pdhf = pdhf0; pdhf0 = pdhf_temp;
+					unlink_unused_block(p->prev);
+					unused += p->prev->size;
+					p = p->prev;
 				}
-
-				//объединим пространства справа
-				while (1)
-				{
-					packed_to_data_header_fields(p + pdhf->size*data_alignment, pdhf0);
-					//обновим prev_size для возможности быстрой коррекции last_offset
-					pdhf0->prev_size = pdhf->size;
-					data_header_fields_to_packed(pdhf0, p + pdhf->size*data_alignment);
-					if (pdhf0->busy_bit == 1 || pdhf0->size == 0) break;
-					pdhf->size += pdhf0->size;
-				}
-				data_header_fields_to_packed(pdhf, p);
-
-
-				//проверим, если вся страница освобождена,
-				//и если она не _first, то удалим ее
-				if (pdhf->size == (default_page_size - ptr0_offset) / data_alignment
-					&& (static_cast<uint8_t*>(p)- ptr0_offset) != _first)
-				{
-					page_remove(p - ptr0_offset);
-				}
+				p->size = unused;
+				//update prev_size of next data_header
+				p_next = cast_data_header(p, unused);
+				p_next->prev = p;
+				//link new unused block
+				link_unused_block(p);
 			};
 
 		private:
-			void* _first;
-			void* _last;
+			page_header* _pool_ptr;
+			size_t       _pool_size;
 		};
 	}//end namespace memory
 
