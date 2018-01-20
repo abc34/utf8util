@@ -5,33 +5,32 @@
 #include <assert.h>
 #include <intrin.h>
 
-//TODO
-//normalize non-UTF characters:
-//    https://github.com/voku/portable-utf8/blob/master/src/voku/helper/UTF8.php#1160
-
-
-
-
-
-
-namespace utfstr
-{
-	class mem_buffer
-	{
-	public:
-		mem_buffer() :buff(0) {};
-	private:
-		void * buff;
-	};
-}
-
-
-
 
 namespace utf8util
 {
 	//sources:
 	//https://github.com/JuliaLang/utf8proc/blob/master/utf8proc.c
+	//normalize non-UTF characters:
+	//    https://github.com/voku/portable-utf8/blob/master/src/voku/helper/UTF8.php#1160
+	//
+	//other info
+	//ByteOrderMark:     0xFEFF or bytes:0xEF,0xBB,0xBF
+	//NotAChar:          0xFFFF or bytes:0xEF,0xBF,0xBF
+	//ByteOrderNotAChar: 0xFFFE ot bytes:0xEF,0xBF,0xBE
+
+	//Порядок байтов: https://ru.wikipedia.org/wiki/%D0%AE%D0%BD%D0%B8%D0%BA%D0%BE%D0%B4
+	//UTF8:     0xEF,0xBB,0xBF (0xFEFF)
+	//UTF16-BE: 0xFEFF (обычно)
+	//UTF16-LE: 0xFFFE (когда нужна перестановка байт)
+	//UTF32-BE: 0x00,0x00,0xFE,0xFF
+	//UTF32-LE: 0xFF,0xFE,0x00,0x00
+
+	//UTF8
+	// codepoint ranges    coded bytes                           coded bytes ranges
+	// U+0000...U+007F     0xxxxxxx                              (00..7F)
+	// U+0080...U+07FF     110xxxxx 10xxxxxx                     (C0..DF) (00..7F)
+	// U+0800...U+FFFF     1110xxxx 10xxxxxx 10xxxxxx            (E0..EF) (00..7F) (00..7F)
+	//U+10000...U+10FFFF   11110xxx 10xxxxxx 10xxxxxx 10xxxxxx   (F0..F7) (00..7F) (00..7F) (00..7F)
 
 	//error codes:
 #define RESULT_OK                     0
@@ -51,84 +50,6 @@ namespace utf8util
 #define R_CHAR_UTF8_1 0xBF
 #define R_CHAR_UTF8_2 0xBD
 
-
-	//ByteOrderMark:     0xFEFF or bytes:0xEF,0xBB,0xBF
-	//NotAChar:          0xFFFF or bytes:0xEF,0xBF,0xBF
-	//ByteOrderNotAChar: 0xFFFE ot bytes:0xEF,0xBF,0xBE
-
-	//Порядок байтов: https://ru.wikipedia.org/wiki/%D0%AE%D0%BD%D0%B8%D0%BA%D0%BE%D0%B4
-	//UTF8:     0xEF,0xBB,0xBF (0xFEFF)
-	//UTF16-BE: 0xFEFF (обычно)
-	//UTF16-LE: 0xFFFE (когда нужна перестановка байт)
-	//UTF32-BE: 0x00,0x00,0xFE,0xFF
-	//UTF32-LE: 0xFF,0xFE,0x00,0x00
-
-	//UTF8
-	// codepoint ranges    coded bytes                           coded bytes ranges
-	// U+0000...U+007F     0xxxxxxx                              (00..7F)
-	// U+0080...U+07FF     110xxxxx 10xxxxxx                     (C0..DF) (00..7F)
-	// U+0800...U+FFFF     1110xxxx 10xxxxxx 10xxxxxx            (E0..EF) (00..7F) (00..7F)
-	//U+10000...U+10FFFF   11110xxx 10xxxxxx 10xxxxxx 10xxxxxx   (F0..F7) (00..7F) (00..7F) (00..7F)
-
-	//counting the number of unicode codepoints in the utf8 string
-	//src_length - src length, uint8_t elements
-	//ошибка: более трёх подряд continuation байт считаются одним символом
-	uint32_t utf8_codepoints(uint8_t* src, uint32_t src_length)
-	{
-		uint32_t cp, ncount = 0, *src_i32, *src_end;
-		if (src_length == 0) return 0;
-		//align to 4 byte
-		cp = reinterpret_cast<uint32_t>(src) & 3;
-		if (cp != 0)
-		{
-			if (cp < 2 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
-			if (cp < 3 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
-			if (cp < 4 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
-		}
-		if (src_length == 0)return ncount;
-		//load as int32_t and count non continuation bytes
-		src_i32 = reinterpret_cast<uint32_t*>(src);
-		src_end = reinterpret_cast<uint32_t*>(src + (src_length & 0xFFFFFFFC));
-		while (src_i32 < src_end)
-		{
-			cp = *src_i32++;				
-			cp ^= 0x80808080;
-			if ((cp & 0xC0000000) != 0)ncount++;
-			if ((cp & 0x00C00000) != 0)ncount++;
-			if ((cp & 0x0000C000) != 0)ncount++;
-			if ((cp & 0x000000C0) != 0)ncount++;
-		}
-		//count last bytes
-		cp = src_length & 3;
-		if (cp != 0)
-		{
-			src = reinterpret_cast<uint8_t*>(src_end);
-			if (cp > 0 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
-			if (cp > 1 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
-			if (cp > 2 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
-		}
-		return ncount;
-	}
-	//counting the number of unicode codepoints in the utf16 string
-	//src_length - src length, uint16_t elements
-	uint32_t utf16_codepoints(uint16_t* src, uint32_t src_length)
-	{
-		uint16_t *src_end = src + src_length;
-		uint32_t ncount = src_length;
-		while (src < src_end)
-		{
-			if (((*src++) & 0xFC00) == 0xDC00) { ncount--; }
-		}
-		return ncount;
-	}
-	//counting the number of unicode codepoints in the utf32 string
-	//src_length - src length, uint32_t elements
-	uint32_t utf32_codepoints(uint32_t* src, uint32_t src_length)
-	{
-		//if(size == 0)//for null terminated data
-		//	while (*data++ > 0) size++;
-		return src_length;
-	}
 	//counting the number bytes nedeed to convert utf8 to utf16
 	//src_length - src length, uint8_t elements
 	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length)
@@ -516,10 +437,67 @@ on_ok_16:
 		return RESULT_OK;
 	}
 
-
-
-
-
+/*
+	//counting the number of unicode codepoints in the utf8 string
+	//src_length - src length, uint8_t elements
+	//ошибка: более трёх подряд continuation байт считаются одним символом
+	uint32_t utf8_codepoints(uint8_t* src, uint32_t src_length)
+	{
+		uint32_t cp, ncount = 0, *src_i32, *src_end;
+		if (src_length == 0) return 0;
+		//align to 4 byte
+		cp = reinterpret_cast<uint32_t>(src) & 3;
+		if (cp != 0)
+		{
+			if (cp < 2 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
+			if (cp < 3 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
+			if (cp < 4 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
+		}
+		if (src_length == 0)return ncount;
+		//load as int32_t and count non continuation bytes
+		src_i32 = reinterpret_cast<uint32_t*>(src);
+		src_end = reinterpret_cast<uint32_t*>(src + (src_length & 0xFFFFFFFC));
+		while (src_i32 < src_end)
+		{
+			cp = *src_i32++;				
+			cp ^= 0x80808080;
+			if ((cp & 0xC0000000) != 0)ncount++;
+			if ((cp & 0x00C00000) != 0)ncount++;
+			if ((cp & 0x0000C000) != 0)ncount++;
+			if ((cp & 0x000000C0) != 0)ncount++;
+		}
+		//count last bytes
+		cp = src_length & 3;
+		if (cp != 0)
+		{
+			src = reinterpret_cast<uint8_t*>(src_end);
+			if (cp > 0 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
+			if (cp > 1 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
+			if (cp > 2 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
+		}
+		return ncount;
+	}
+	//counting the number of unicode codepoints in the utf16 string
+	//src_length - src length, uint16_t elements
+	uint32_t utf16_codepoints(uint16_t* src, uint32_t src_length)
+	{
+		uint16_t *src_end = src + src_length;
+		uint32_t ncount = src_length;
+		while (src < src_end)
+		{
+			if (((*src++) & 0xFC00) == 0xDC00) { ncount--; }
+		}
+		return ncount;
+	}
+	//counting the number of unicode codepoints in the utf32 string
+	//src_length - src length, uint32_t elements
+	uint32_t utf32_codepoints(uint32_t* src, uint32_t src_length)
+	{
+		//if(size == 0)//for null terminated data
+		//	while (*data++ > 0) size++;
+		return src_length;
+	}
+*/
 
 
 
@@ -577,22 +555,7 @@ namespace memory
 	//        |                               |                              |                                   |                |                 | page_size
 	//        --------------------------------------------------------------------------------------------------------------------------------------|
 	//
-	//????
-	//For data sizes <= 16 bytes (x86-32) or 32 bytes (x86-64), allocated one block 384 + 4096 bytes.
-	//Number blocks = 1024 blocks.
-	//First  level - blocks busy bits. Occupy 1bit*1024 = 128 bytes.
-	//Second level - blocks sizes by 2 bits =>
-	//       00 -> 4 bytes, 01 -> 8 bytes, 10 -> 12 bytes, 11 -> 16 bytes. Occupy 2bit*1024 = 256 bytes.
-	//Total header size = 128 + 256 = 384 bytes.
-	//Total data size   = 1024 * 4 bytes = 4096 bytes.
 
-
-
-	//#ifdef _WIN64
-	//# define DATA_PTR (uint64_t*)
-	//#else
-	//# define DATA_PTR (uint32_t*)
-	//#endif
 
 	//enum data_constant
 	//{
@@ -612,8 +575,8 @@ namespace memory
 #define min_block_size       sizeof(struct data_header)
 
 #define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
-	//#define get_first_unused_block_by_size(_size) [this](register int64_t size) \
-	//		{\
+//#define get_first_unused_block_by_size(_size) [this](register int64_t size) \
+//		{\
 //			register union { double d; int64_t i; }v = { (double)size }; \
 //			v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0; \
 //			return &this->_pool_ptr->unused_ptr[v.i]; \
