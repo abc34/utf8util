@@ -9,9 +9,12 @@
 namespace utf8util
 {
 	//sources:
+	//https://en.wikipedia.org/wiki/UTF-8
+	//https://github.com/voku/portable-utf8/tree/master/tests
 	//https://github.com/JuliaLang/utf8proc/blob/master/utf8proc.c
-	//normalize non-UTF characters:
-	//    https://github.com/voku/portable-utf8/blob/master/src/voku/helper/UTF8.php#1160
+	//https://github.com/ww898/utf-cpp/blob/master/test/utf_converters_test.cpp
+	//https://github.com/tchwork/utf8/blob/master/tests/Utf8/Utf8StrcasecmpTest.php
+	//https://github.com/svaarala/duktape/blob/master/src-input/duk_unicode_support.c
 	//
 	//other info
 	//ByteOrderMark:     0xFEFF or bytes:0xEF,0xBB,0xBF
@@ -87,17 +90,11 @@ namespace utf8util
 		}
 		//last less or equal 3 bytes
 		//because DECODE
-		//[length = 1]
-		//(x) ==> 1
-		//[length = 2]
-		//(1 x) or (e x) or (2 ~8) ==> 2
-		//else (2 8), (3 x), (4 x) ==> 1
-		//[length = 3]
-		//(4 x x) ==> 1
-		//else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
-		//else (2 8 x) ==> 2
-		//else (3 8 8) ==> 1
-		//else (3 8 ~8) ==> 2
+		//[length = 1] (x) ==> 1
+		//[length = 2] (1 x) or (e x) or (2 ~8) ==> 2 else (2 8), (3 x), (4 x) ==> 1
+		//[length = 3] (4 x x) ==> 1
+		//  else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
+		//  else (2 8 x) ==> 2 else (3 8 8) ==> 1 else (3 8 ~8) ==> 2.
 		if (src_length == 1) { ncount += 1; }
 		else if (src_length == 2)
 		{
@@ -178,17 +175,11 @@ on_ok:
 		}
 		//last less or equal 3 bytes
 		//because DECODE
-		//[length = 1]
-		//(x) ==> 1
-		//[length = 2]
-		//(1 x) or (e x) or (2 ~8) ==> 2
-		//else (2 8), (3 x), (4 x) ==> 1
-		//[length = 3]
-		//(4 x x) ==> 1
-		//else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
-		//else (2 8 x) ==> 2
-		//else (3 8 8) ==> 1
-		//else (3 8 ~8) ==> 2
+		//[length = 1] (x) ==> 1
+		//[length = 2] (1 x) or (e x) or (2 ~8) ==> 2 else (2 8), (3 x), (4 x) ==> 1
+		//[length = 3] (4 x x) ==> 1
+		//  else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
+		//  else (2 8 x) ==> 2 else (3 8 8) ==> 1 else (3 8 ~8) ==> 2.
 		if (src_length == 1) { ncount += 1; }
 		else if (src_length == 2)
 		{
