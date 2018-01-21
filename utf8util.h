@@ -118,7 +118,7 @@ namespace utf8util
 		return ncount;
 	}
 	//counting the number uint8 nedeed to convert utf16 to utf8
-	//src_length - src length, uint8_t elements
+	//src_length - src length, uint16_t elements
 	uint32_t utf16to8_length(uint16_t* src, uint32_t src_length)
 	{
 		uint16_t c, *src_end = src + src_length;
@@ -203,7 +203,7 @@ on_ok:
 		return ncount;
 	}
 	//counting the number uint8 nedeed to convert utf32 to utf8
-	//src_length - src length, uint8_t elements
+	//src_length - src length, uint32_t elements
 	uint32_t utf32to8_length(uint32_t* src, uint32_t src_length)
 	{
 		uint32_t ncount = 0;
