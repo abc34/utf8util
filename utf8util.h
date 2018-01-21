@@ -53,7 +53,7 @@ namespace utf8util
 #define R_CHAR_UTF8_1 0xBF
 #define R_CHAR_UTF8_2 0xBD
 
-	//counting the number bytes nedeed to convert utf8 to utf16
+	//counting the number uint16 nedeed to convert utf8 to utf16
 	//src_length - src length, uint8_t elements
 	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length)
 	{
@@ -117,7 +117,7 @@ namespace utf8util
 		}
 		return ncount;
 	}
-	//counting the number bytes nedeed to convert utf16 to utf8
+	//counting the number uint8 nedeed to convert utf16 to utf8
 	//src_length - src length, uint8_t elements
 	uint32_t utf16to8_length(uint16_t* src, uint32_t src_length)
 	{
@@ -138,7 +138,7 @@ namespace utf8util
 		}
 		return ncount;
 	}
-	//counting the number bytes nedeed to convert utf8 to utf32
+	//counting the number uint32 nedeed to convert utf8 to utf32
 	//src_length - src length, uint8_t elements
 	uint32_t utf8to32_length(uint8_t* src, uint32_t src_length)
 	{
@@ -202,7 +202,7 @@ on_ok:
 		}
 		return ncount;
 	}
-	//counting the number bytes nedeed to convert utf32 to utf8
+	//counting the number uint8 nedeed to convert utf32 to utf8
 	//src_length - src length, uint8_t elements
 	uint32_t utf32to8_length(uint32_t* src, uint32_t src_length)
 	{
