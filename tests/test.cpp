@@ -274,7 +274,7 @@ int main()
 	uint16_t d16[1024];
 	unicode_tuple tuple;
 	bool success;
-
+#define OPT OPT_SKIP_INVALID
 
 	printf("TEST utf8_length for 3 bytes string\n");
 	{
@@ -287,10 +287,10 @@ int main()
 				src_length = len; count = 0; src = (uint8_t*)&cstr;
 				while (src_length > 0)
 				{
-					UTF8_DECODE(cp, src, src_length, true);
+					UTF8_DECODE(cp, src, src_length, OPT_SKIP_INVALID);
 					count++;
 				}
-				n16 = utf8util::utf8to16_length((uint8_t*)&cstr, len);
+				n16 = utf8util::utf8to16_length((uint8_t*)&cstr, len, OPT_SKIP_INVALID);
 				if (count != n16) { printf("cstr = %i len = %i error\n", cstr, len); len = 10; break; }
 			}
 		}
@@ -307,12 +307,12 @@ int main()
 				src_length = len; count = 0; src = (uint16_t*)&cstr;
 				while (src_length > 0)
 				{
-					UTF16_DECODE(cp, src, src_length, true);
+					UTF16_DECODE(cp, src, src_length, OPT);
 					count++;
 				}
-				n8 = utf8util::utf16to8_length((uint16_t*)&cstr, len);
-				result = utf8util::utf16to8((uint16_t*)&cstr, len, d8, n8, true);
-				n32 = utf8util::utf8to32_length(d8, n8);
+				n8 = utf8util::utf16to8_length((uint16_t*)&cstr, len, OPT);
+				result = utf8util::utf16to8((uint16_t*)&cstr, len, d8, n8, OPT);
+				n32 = utf8util::utf8to32_length(d8, n8, OPT);
 				if (count != n32 || result != RESULT_OK) { printf("cstr = %i len = %i error\n", cstr, len); len = 10; break; }
 			}
 		}
@@ -355,14 +355,14 @@ int main()
 	printf("TEST utf8 for some erroneous string\n");
 	{
 		char str[] = "\xE0\xA0\xF0"; n8 = sizeof(str) - 1;
-		n16 = utf8util::utf8to16_length((uint8_t*)str, n8);
-		printf("%s\n", n16 == 2 ? "success" : "error");
-		n32 = utf8util::utf8to32_length((uint8_t*)str, n8);
-		printf("%s\n", n32 == 2 ? "success" : "error");
-		result = utf8util::utf8to16((uint8_t*)str, n8, d16, n16, 1);
-		printf("%s\n", result == RESULT_OK && d16[0] == 0xFFFD ? "success" : "error");
-		result = utf8util::utf8to32((uint8_t*)str, n8, d32, n32, 1);
-		printf("%s\n", result == RESULT_OK && d32[0] == 0xFFFD ? "success" : "error");
+		n16 = utf8util::utf8to16_length((uint8_t*)str, n8, OPT);
+		printf("%s\n", n16 == (OPT == OPT_SKIP_INVALID ? 0 : 2) ? "success" : "error");
+		n32 = utf8util::utf8to32_length((uint8_t*)str, n8, OPT);
+		printf("%s\n", n32 == (OPT == OPT_SKIP_INVALID ? 0 : 2) ? "success" : "error");
+		result = utf8util::utf8to16((uint8_t*)str, n8, d16, n16, OPT);
+		printf("%s\n", result == RESULT_OK && (OPT == OPT_SKIP_INVALID ? true : d16[0] == 0xFFFD) ? "success" : "error");
+		result = utf8util::utf8to32((uint8_t*)str, n8, d32, n32, OPT);
+		printf("%s\n", result == RESULT_OK && (OPT == OPT_SKIP_INVALID ? true : d32[0] == 0xFFFD) ? "success" : "error");
 	}
 	//TEST convert utf8to16
 	printf("TEST convert utf8to16\n");
@@ -372,8 +372,8 @@ int main()
 			std::wstring res;
 			tuple = (unicode_tuple&)unicode_test_data[i];
 			n8 = tuple.utf8.size();
-			n16 = utf8util::utf8to16_length((uint8_t*)tuple.utf8.c_str(), n8); memset(d16, 0xF, sizeof(d16));
-			result = utf8util::utf8to16((uint8_t*)tuple.utf8.c_str(), n8, d16, n16, 0);
+			n16 = utf8util::utf8to16_length((uint8_t*)tuple.utf8.c_str(), n8, OPT); memset(d16, 0xF, sizeof(d16));
+			result = utf8util::utf8to16((uint8_t*)tuple.utf8.c_str(), n8, d16, n16, OPT);
 			res.assign((const wchar_t*)d16, n16);
 			success = result == RESULT_OK && res == tuple.utf16;
 			printf("%i) %s %i\n", i, success ? "success" : "error", result);
@@ -386,8 +386,8 @@ int main()
 			std::u32string res;
 			tuple = (unicode_tuple&)unicode_test_data[i];
 			n8 = tuple.utf8.size();
-			n32 = utf8util::utf8to32_length((uint8_t*)tuple.utf8.c_str(), n8); memset(d32, 0xF, sizeof(d32));
-			result = utf8util::utf8to32((uint8_t*)tuple.utf8.c_str(), n8, d32, n32, 0);
+			n32 = utf8util::utf8to32_length((uint8_t*)tuple.utf8.c_str(), n8, OPT); memset(d32, 0xF, sizeof(d32));
+			result = utf8util::utf8to32((uint8_t*)tuple.utf8.c_str(), n8, d32, n32, OPT);
 			res.assign((const char32_t*)d32, n32);
 			success = result == RESULT_OK && res == tuple.utf32;
 			printf("%i) %s %i\n", i, success ? "success" : "error", result);
@@ -400,8 +400,8 @@ int main()
 			std::string res;
 			tuple = (unicode_tuple&)unicode_test_data[i];
 			n16 = tuple.utf16.size();
-			n8 = utf8util::utf16to8_length((uint16_t*)tuple.utf16.c_str(), n16); memset(d8, 0xF, sizeof(d8));
-			result = utf8util::utf16to8((uint16_t*)tuple.utf16.c_str(), n16, d8, n8, 0);
+			n8 = utf8util::utf16to8_length((uint16_t*)tuple.utf16.c_str(), n16, OPT); memset(d8, 0xF, sizeof(d8));
+			result = utf8util::utf16to8((uint16_t*)tuple.utf16.c_str(), n16, d8, n8, OPT);
 			res.assign((const char*)d8, n8);
 			success = result == RESULT_OK && res == tuple.utf8;
 			printf("%i) %s %i\n", i, success ? "success" : "error", result);
@@ -414,8 +414,8 @@ int main()
 			std::string res;
 			tuple = (unicode_tuple&)unicode_test_data[i];
 			n32 = tuple.utf32.size();
-			n8 = utf8util::utf32to8_length((uint32_t*)tuple.utf32.c_str(), n32); memset(d8, 0xF, sizeof(d8));
-			result = utf8util::utf32to8((uint32_t*)tuple.utf32.c_str(), n32, d8, n8, 0);
+			n8 = utf8util::utf32to8_length((uint32_t*)tuple.utf32.c_str(), n32, OPT); memset(d8, 0xF, sizeof(d8));
+			result = utf8util::utf32to8((uint32_t*)tuple.utf32.c_str(), n32, d8, n8, OPT);
 			res.assign((const char*)d8, n8);
 			success = result == RESULT_OK && res == tuple.utf8;
 			printf("%i) %s %i\n", i, success ? "success" : "error", result);
