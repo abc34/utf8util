@@ -47,17 +47,23 @@ namespace utf8util
 #define ERROR_UTF16_CONTINUATION_WORD 8
 #define ERROR_UTF32_DECODE_RANGE      9
 #define ERROR_UTF32_ENCODE_RANGE      10
-//replacement_char -> "�" 0xFFFD utf8 -> [EF,BF,BD] or U+FFFF utf8->[EF BF BF] http://en.wikipedia.org/wiki/Replacement_character#Replacement_character
+//replacement_char -> "�" 0xFFFD utf8 -> [EF,BF,BD] or U+FFFF utf8->[EF BF BF]
 #define R_CHAR        0xFFFD
 #define R_CHAR_UTF8_0 0xEF
 #define R_CHAR_UTF8_1 0xBF
 #define R_CHAR_UTF8_2 0xBD
+//options on invalid chars
+#define OPT_REPLACE_INVALID   0
+#define OPT_SKIP_INVALID      1
+#define OPT_BREAKON_INVALID   2
+
 
 	//counting the number uint16 nedeed to convert utf8 to utf16
 	//src_length - src length, uint8_t elements
-	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length)
+	//option     - OPTION_SKIP_INVALID or OPTION_REPLACE_INVALID
+	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
 	{
-		uint32_t ncount = 0;
+		uint32_t ncount = 0, nerrors = 0;
 		while (src_length > 3)
 		{
 			uint8_t c = *src++;
@@ -84,7 +90,7 @@ namespace utf8util
 				goto on_ok;
 			}
 		on_error_continuation:
-			src--;
+			src--; nerrors++;
 		on_ok:
 			ncount++;
 		}
@@ -94,32 +100,35 @@ namespace utf8util
 		//[length = 2] (1 x) or (e x) or (2 ~8) ==> 2 else (2 8), (3 x), (4 x) ==> 1
 		//[length = 3] (4 x x) ==> 1
 		//  else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
-		//  else (2 8 x) ==> 2 else (3 8 8) ==> 1 else (3 8 ~8) ==> 2.
-		if (src_length == 1) { ncount += 1; }
+		//  else (2 8 x) ==> 2 else (3 8 ~8) ==> 2 else (3 8 8) ==> 1.
+		if (src_length == 1) { ncount += 1; if (src[0] >= 0x80)nerrors++; }
 		else if (src_length == 2)
 		{
 			//test 2 bytes
-			if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; }
-			else { ncount += 1; }
+			if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
+			else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
 		}
 		else if (src_length == 3)
 		{
-			if (src[0] >= 0xF0 && src[0] < 0xF8) { ncount++; }
+			if (src[0] >= 0xF0 && src[0] < 0xF8) { ncount++; nerrors++; }
 			else if (src[0] < 0xC0 || src[0] >= 0xF8 || (src[1] & 0xC0) != 0x80)
 			{
-				ncount++; src++;
+				ncount++; if (src[0] >= 0x80)nerrors++; src++;
 				//test 2 bytes
-				if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; }
-				else { ncount += 1; }
+				if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
+				else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
 			}
-			else if (src[0] < 0xE0 || (src[2] & 0xC0) != 0x80) { ncount += 2; }
+			else if (src[0] < 0xE0) { ncount += 2; if (src[2] >= 0x80) nerrors++; }
+			else if ((src[2] & 0xC0) != 0x80) { ncount += 2; nerrors++; if (src[2] >= 0x80) nerrors++; }
 			else { ncount += 1; }
 		}
+		if (option == OPT_SKIP_INVALID) ncount -= nerrors;
 		return ncount;
 	}
 	//counting the number uint8 nedeed to convert utf16 to utf8
 	//src_length - src length, uint16_t elements
-	uint32_t utf16to8_length(uint16_t* src, uint32_t src_length)
+	//option     - OPTION_SKIP_INVALID or OPTION_REPLACE_INVALID
+	uint32_t utf16to8_length(uint16_t* src, uint32_t src_length, uint8_t option)
 	{
 		uint16_t c, *src_end = src + src_length;
 		uint32_t ncount = 0;
@@ -131,18 +140,19 @@ namespace utf8util
 			else if (c < 0xD800 || c>0xDFFF) ncount += 3;
 			else if (c < 0xDC00)
 			{
-				if (src == src_end || src[0] < 0xDC00 || src[0] > 0xDFFF) ncount += 3;
+				if (src == src_end || src[0] < 0xDC00 || src[0] > 0xDFFF) { if (option == OPT_REPLACE_INVALID) ncount += 3; }
 				else { ncount += 4;src++; }
 			}
-			else ncount += 3;
+			else if (option == OPT_REPLACE_INVALID) ncount += 3;
 		}
 		return ncount;
 	}
 	//counting the number uint32 nedeed to convert utf8 to utf32
 	//src_length - src length, uint8_t elements
-	uint32_t utf8to32_length(uint8_t* src, uint32_t src_length)
+	//option     - OPTION_SKIP_INVALID or OPTION_REPLACE_INVALID
+	uint32_t utf8to32_length(uint8_t* src, uint32_t src_length, uint8_t option)
 	{
-		uint32_t ncount = 0;
+		uint32_t ncount = 0, nerrors = 0;
 		while (src_length > 3)
 		{
 			uint8_t c = *src++;
@@ -168,9 +178,9 @@ namespace utf8util
 				src_length -= 4;
 				goto on_ok;
 			}
-on_error_continuation:
-			src--;
-on_ok:
+		on_error_continuation:
+			src--; nerrors++;
+		on_ok:
 			ncount++;
 		}
 		//last less or equal 3 bytes
@@ -179,32 +189,34 @@ on_ok:
 		//[length = 2] (1 x) or (e x) or (2 ~8) ==> 2 else (2 8), (3 x), (4 x) ==> 1
 		//[length = 3] (4 x x) ==> 1
 		//  else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
-		//  else (2 8 x) ==> 2 else (3 8 8) ==> 1 else (3 8 ~8) ==> 2.
-		if (src_length == 1) { ncount += 1; }
+		//  else (2 8 x) ==> 2 else (3 8 ~8) ==> 2 else (3 8 8) ==> 1.
+		if (src_length == 1) { ncount += 1; if (src[0] >= 0x80)nerrors++; }
 		else if (src_length == 2)
 		{
 			//test 2 bytes
-			if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; }
-			else { ncount += 1; }
+			if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
+			else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
 		}
 		else if (src_length == 3)
 		{
-			if (src[0] >= 0xF0 && src[0] < 0xF8) { ncount++; }
+			if (src[0] >= 0xF0 && src[0] < 0xF8) { ncount++; nerrors++; }
 			else if (src[0] < 0xC0 || src[0] >= 0xF8 || (src[1] & 0xC0) != 0x80)
 			{
-				ncount++; src++;
+				ncount++; if (src[0] >= 0x80)nerrors++; src++;
 				//test 2 bytes
-				if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; }
-				else { ncount += 1; }
+				if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
+				else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
 			}
-			else if (src[0] < 0xE0 || (src[2] & 0xC0) != 0x80) { ncount += 2; }
+			else if (src[0] < 0xE0) { ncount += 2; if (src[2] >= 0x80) nerrors++; }
+			else if ((src[2] & 0xC0) != 0x80) { ncount += 2; nerrors++; if (src[2] >= 0x80) nerrors++; }
 			else { ncount += 1; }
 		}
+		if (option == OPT_SKIP_INVALID) ncount -= nerrors;
 		return ncount;
 	}
 	//counting the number uint8 nedeed to convert utf32 to utf8
 	//src_length - src length, uint32_t elements
-	uint32_t utf32to8_length(uint32_t* src, uint32_t src_length)
+	uint32_t utf32to8_length(uint32_t* src, uint32_t src_length, uint8_t option)
 	{
 		uint32_t ncount = 0;
 		uint32_t c, *src_end = src + src_length;
@@ -215,12 +227,12 @@ on_ok:
 			else if (c < 0x0800) ncount += 2;
 			else if (c < 0x10000) ncount += 3;
 			else if (c < 0x110000) ncount += 4;
-			else ncount += 3;
+			else if (option == OPT_REPLACE_INVALID) ncount += 3;
 		}
 		return ncount;
 	}
 
-#define UTF8_DECODE(cp, src, src_length, need_replace) \
+#define UTF8_DECODE(cp, src, src_length, option) \
 		uint8_t c = *src++; \
 		if (c < 0x80) { cp = static_cast<uint32_t>(c); src_length--; goto on_ok;} \
 		if (c < 0xC0) { goto on_error_range;} \
@@ -258,14 +270,14 @@ on_ok:
 			goto on_ok; \
 		} \
 on_error_range: \
-		if (!need_replace)return ERROR_UTF8_DECODE_RANGE; src_length--; cp = R_CHAR; goto on_ok; \
+		if (option == OPT_BREAKON_INVALID)return ERROR_UTF8_DECODE_RANGE; src_length--; if(option == OPT_SKIP_INVALID)continue; cp = R_CHAR; goto on_ok; \
 on_error_length: \
-		if (!need_replace)return ERROR_SRC_LENGTH; src_length = 0; cp = R_CHAR; goto on_ok; \
+		if (option == OPT_BREAKON_INVALID)return ERROR_SRC_LENGTH; src_length = 0; if(option == OPT_SKIP_INVALID)continue; cp = R_CHAR; goto on_ok; \
 on_error_continuation: \
-		if (!need_replace)return ERROR_UTF8_CONTINUATION_BYTE; src--; cp = R_CHAR; \
+		if (option == OPT_BREAKON_INVALID)return ERROR_UTF8_CONTINUATION_BYTE; src--; if(option == OPT_SKIP_INVALID)continue; cp = R_CHAR; \
 on_ok:
 
-#define UTF8_ENCODE(cp, dst, dst_length, need_replace) \
+#define UTF8_ENCODE(cp, dst, dst_length, option) \
 	if (cp < 0x80) \
 	{ \
 		if (dst_length == 0) { return ERROR_DST_LENGTH; } \
@@ -298,7 +310,8 @@ on_ok:
 	else \
 	{ \
 		/*on error emit replacement codepoint U+FFFD utf8->[EF BF BD] or U+FFFF utf8->[EF BF BF]*/ \
-		if (!need_replace) return ERROR_UTF8_ENCODE_RANGE; \
+		if (option == OPT_BREAKON_INVALID) return ERROR_UTF8_ENCODE_RANGE; \
+		if (option == OPT_SKIP_INVALID) continue; \
 		if (dst_length < 3) { return ERROR_DST_LENGTH; } \
 		*dst++ = R_CHAR_UTF8_0; \
 		*dst++ = R_CHAR_UTF8_1; \
@@ -306,7 +319,7 @@ on_ok:
 		dst_length -= 3; \
 	}
 
-#define UTF16_DECODE(cp, src, src_length, need_replace) \
+#define UTF16_DECODE(cp, src, src_length, option) \
 	uint16_t c = *src++; \
 	/*if (need_swap) c = static_cast<uint16_t>(((c & 0xFF) << 8) | (c >> 8));*/ \
 	if (c < 0xD800 || c > 0xDFFF) { cp = static_cast<uint32_t>(c); src_length--; goto on_ok_16; } \
@@ -322,21 +335,22 @@ on_ok:
 		goto on_ok_16; \
 	} \
 /*on_error_range:*/ \
-	if (!need_replace)return ERROR_UTF16_DECODE_RANGE; src_length--; cp = R_CHAR; goto on_ok_16; \
+	if (option == OPT_BREAKON_INVALID)return ERROR_UTF16_DECODE_RANGE; src_length--; if(option == OPT_SKIP_INVALID) continue; cp = R_CHAR; goto on_ok_16; \
 on_error_length_16: \
-	if (!need_replace)return ERROR_SRC_LENGTH; src_length = 0; cp = R_CHAR; goto on_ok_16; \
+	if (option == OPT_BREAKON_INVALID)return ERROR_SRC_LENGTH; src_length = 0; if(option == OPT_SKIP_INVALID) continue; cp = R_CHAR; goto on_ok_16; \
 on_error_continuation_16: \
-	if (!need_replace)return ERROR_UTF16_CONTINUATION_WORD; src--; cp = R_CHAR; \
+	if (option == OPT_BREAKON_INVALID)return ERROR_UTF16_CONTINUATION_WORD; src--; if(option == OPT_SKIP_INVALID) continue; cp = R_CHAR; \
 on_ok_16:
 
-#define UTF16_ENCODE(cp, dst, dst_length, need_replace) \
+#define UTF16_ENCODE(cp, dst, dst_length, option) \
 	if (dst_length == 0) { return ERROR_DST_LENGTH; } \
 	if (cp < 0xD800) { *dst++ = static_cast<uint16_t>(cp); dst_length--; } \
 	else if (cp < 0xE000) \
 	{ \
 		/*codepoint in ranges U+D800..U+DBFF and U+DC00..U+DFFF is reserved for utf16 surrogate pairs */ \
-		/*on error emit replacement codepoint*/ \
-		if (!need_replace) return ERROR_UTF16_ENCODE_RANGE; *dst++ = R_CHAR; dst_length--; \
+		if (option == OPT_BREAKON_INVALID) return ERROR_UTF16_ENCODE_RANGE; \
+		if (option == OPT_SKIP_INVALID) continue; \
+		*dst++ = R_CHAR; dst_length--; \
 	} \
 	else if (cp < 0x10000) \
 	{ \
@@ -354,141 +368,144 @@ on_ok_16:
 	else \
 	{ \
 		/*on error emit replacement codepoint*/ \
-		if (!need_replace) return ERROR_UTF16_ENCODE_RANGE; *dst++ = R_CHAR; dst_length--; \
+		if (option == OPT_BREAKON_INVALID) return ERROR_UTF16_ENCODE_RANGE; \
+		if (option == OPT_SKIP_INVALID) continue; \
+		*dst++ = R_CHAR; dst_length--; \
 	}
 
-#define UTF32_DECODE(cp, src, src_length, need_replace) \
+#define UTF32_DECODE(cp, src, src_length, option) \
 	cp = *src++; src_length--; \
 	/*if (need_swap) cp = ((cp & 0xFF) << 24) | ((cp & 0xFF00) << 8) | ((cp & 0xFF0000) >> 8) | (cp >> 24);*/ \
-	if (cp >= 0x110000) { if (!need_replace) return ERROR_UTF32_DECODE_RANGE; cp = R_CHAR; }
+	if (cp >= 0x110000) { if (option == OPT_BREAKON_INVALID) return ERROR_UTF32_DECODE_RANGE; if (option == OPT_SKIP_INVALID) continue; cp = R_CHAR; }
 
-#define UTF32_ENCODE(cp, dst, dst_length, need_replace) \
+#define UTF32_ENCODE(cp, dst, dst_length, option) \
 	if (dst_length == 0) { return ERROR_DST_LENGTH; } \
-	if (cp >= 0x110000) { if (!need_replace) return ERROR_UTF32_ENCODE_RANGE; cp = R_CHAR; } \
+	if (cp >= 0x110000) { if (option == OPT_BREAKON_INVALID) return ERROR_UTF32_ENCODE_RANGE; if (option == OPT_SKIP_INVALID) continue; cp = R_CHAR; } \
 	*dst++ = cp; dst_length--;
 
 	//convert utf8 string to utf32 string
 	//src_length - src string length, uint8_t chars
 	//dst_length - dst string length, uint32_t chars
-	uint8_t utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t need_replace)
+	uint8_t utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t cp;
 		//test BOM: 0xEF,0xBB,0xBF and skip it
 		//if (src_length > 2 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; src_length -= 3; }
 		while (src_length > 0)
 		{
-			UTF8_DECODE(cp, src, src_length, need_replace);
-			UTF32_ENCODE(cp, dst, dst_length, 0);
+			//UTF8_DECODE(cp, src, src_length, need_replace);
+			UTF8_DECODE(cp, src, src_length, option);
+			UTF32_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
 	}
 	//convert utf32 string to utf8 string
 	//src_length - src string length, uint32_t chars
 	//dst_length - dst string length, uint8_t chars
-	uint8_t utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t need_replace)
+	uint8_t utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t cp;
 		//test BOM: 0x0000FEFF and skip it
 		//if (src_length > 0 && src[0] == 0x0000FEFF) { src++; src_length--; }
 		while (src_length > 0)
 		{
-			UTF32_DECODE(cp, src, src_length, need_replace);
-			UTF8_ENCODE(cp, dst, dst_length, 0);
+			UTF32_DECODE(cp, src, src_length, option);
+			UTF8_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
 	}
 	//convert utf8 string to utf16 string
 	//src_length - src string length, uint8_t chars
 	//dst_length - dst string length, uint16_t chars
-	uint8_t utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t need_replace)
+	uint8_t utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t cp;
 		//test BOM: 0xEF,0xBB,0xBF and skip it
 		//if (src_length > 2 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; src_length -= 3; }
 		while (src_length > 0)
 		{
-			UTF8_DECODE(cp, src, src_length, need_replace);
-			UTF16_ENCODE(cp, dst, dst_length, 0);
+			UTF8_DECODE(cp, src, src_length, option);
+			UTF16_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
 	}
 	//convert utf16 string to utf8 string
 	//src_length - src string length, uint16_t chars
 	//dst_length - dst string length, uint8_t chars
-	uint8_t utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t need_replace)
+	uint8_t utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t cp;
 		//test BOM: 0xFEFF and skip it
 		//if (src_length > 0 && src[0] == 0xFEFF) { src++; src_length--; }
 		while (src_length > 0)
 		{
-			UTF16_DECODE(cp, src, src_length, need_replace);
-			UTF8_ENCODE(cp, dst, dst_length, 0);
+			UTF16_DECODE(cp, src, src_length, option);
+			UTF8_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
 	}
 
-/*
+	/*
 	//counting the number of unicode codepoints in the utf8 string
 	//src_length - src length, uint8_t elements
 	//ошибка: более трёх подряд continuation байт считаются одним символом
 	uint32_t utf8_codepoints(uint8_t* src, uint32_t src_length)
 	{
-		uint32_t cp, ncount = 0, *src_i32, *src_end;
-		if (src_length == 0) return 0;
-		//align to 4 byte
-		cp = reinterpret_cast<uint32_t>(src) & 3;
-		if (cp != 0)
-		{
-			if (cp < 2 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
-			if (cp < 3 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
-			if (cp < 4 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
-		}
-		if (src_length == 0)return ncount;
-		//load as int32_t and count non continuation bytes
-		src_i32 = reinterpret_cast<uint32_t*>(src);
-		src_end = reinterpret_cast<uint32_t*>(src + (src_length & 0xFFFFFFFC));
-		while (src_i32 < src_end)
-		{
-			cp = *src_i32++;				
-			cp ^= 0x80808080;
-			if ((cp & 0xC0000000) != 0)ncount++;
-			if ((cp & 0x00C00000) != 0)ncount++;
-			if ((cp & 0x0000C000) != 0)ncount++;
-			if ((cp & 0x000000C0) != 0)ncount++;
-		}
-		//count last bytes
-		cp = src_length & 3;
-		if (cp != 0)
-		{
-			src = reinterpret_cast<uint8_t*>(src_end);
-			if (cp > 0 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
-			if (cp > 1 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
-			if (cp > 2 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
-		}
-		return ncount;
+	uint32_t cp, ncount = 0, *src_i32, *src_end;
+	if (src_length == 0) return 0;
+	//align to 4 byte
+	cp = reinterpret_cast<uint32_t>(src) & 3;
+	if (cp != 0)
+	{
+	if (cp < 2 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
+	if (cp < 3 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
+	if (cp < 4 && src_length > 0) { if ((((*src++) ^ 0x80) & 0xC0) != 0) ncount++; src_length--; }
+	}
+	if (src_length == 0)return ncount;
+	//load as int32_t and count non continuation bytes
+	src_i32 = reinterpret_cast<uint32_t*>(src);
+	src_end = reinterpret_cast<uint32_t*>(src + (src_length & 0xFFFFFFFC));
+	while (src_i32 < src_end)
+	{
+	cp = *src_i32++;
+	cp ^= 0x80808080;
+	if ((cp & 0xC0000000) != 0)ncount++;
+	if ((cp & 0x00C00000) != 0)ncount++;
+	if ((cp & 0x0000C000) != 0)ncount++;
+	if ((cp & 0x000000C0) != 0)ncount++;
+	}
+	//count last bytes
+	cp = src_length & 3;
+	if (cp != 0)
+	{
+	src = reinterpret_cast<uint8_t*>(src_end);
+	if (cp > 0 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
+	if (cp > 1 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
+	if (cp > 2 && (((*src++) ^ 0x80) & 0xC0) != 0)ncount++;
+	}
+	return ncount;
 	}
 	//counting the number of unicode codepoints in the utf16 string
 	//src_length - src length, uint16_t elements
 	uint32_t utf16_codepoints(uint16_t* src, uint32_t src_length)
 	{
-		uint16_t *src_end = src + src_length;
-		uint32_t ncount = src_length;
-		while (src < src_end)
-		{
-			if (((*src++) & 0xFC00) == 0xDC00) { ncount--; }
-		}
-		return ncount;
+	uint16_t *src_end = src + src_length;
+	uint32_t ncount = src_length;
+	while (src < src_end)
+	{
+	if (((*src++) & 0xFC00) == 0xDC00) { ncount--; }
+	}
+	return ncount;
 	}
 	//counting the number of unicode codepoints in the utf32 string
 	//src_length - src length, uint32_t elements
 	uint32_t utf32_codepoints(uint32_t* src, uint32_t src_length)
 	{
-		//if(size == 0)//for null terminated data
-		//	while (*data++ > 0) size++;
-		return src_length;
+	//if(size == 0)//for null terminated data
+	//	while (*data++ > 0) size++;
+	return src_length;
 	}
-*/
+	*/
 
 
 
@@ -566,8 +583,8 @@ namespace memory
 #define min_block_size       sizeof(struct data_header)
 
 #define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
-//#define get_first_unused_block_by_size(_size) [this](register int64_t size) \
-//		{\
+	//#define get_first_unused_block_by_size(_size) [this](register int64_t size) \
+	//		{\
 //			register union { double d; int64_t i; }v = { (double)size }; \
 //			v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0; \
 //			return &this->_pool_ptr->unused_ptr[v.i]; \
