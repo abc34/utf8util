@@ -272,37 +272,42 @@ int main()
 	uint8_t  d8[1024];
 	uint32_t d32[1024];
 	uint16_t d16[1024];
+	utf8util::validation_info info;
 	unicode_tuple tuple;
 	bool success;
 #define OPT OPT_SKIP_INVALID
 
-	printf("TEST utf8_length for 3 bytes string\n");
+	printf("TEST utf8_length for 5 bytes string\n");
 	{
-		uint8_t *src, len = 3;
-		uint32_t cstr, cp, src_length, count;
-		for (len = 0;len < 4;len++)
+		uint8_t *src, len;
+		uint32_t cp, src_length, count;
+		uint64_t cstr;
+		for (len = 0;len <= 5;len++)
 		{
-			for (cstr = 0;cstr < (1U << (len * 8));cstr += 17)
+			for (cstr = 0;cstr < (1ULL << (len * 8));cstr += 135)
 			{
 				src_length = len; count = 0; src = (uint8_t*)&cstr;
 				while (src_length > 0)
 				{
-					UTF8_DECODE(cp, src, src_length, OPT_SKIP_INVALID);
-					count++;
+					UTF8_DECODE(cp, src, src_length, OPT);
+					count++;if (cp >= 0x10000)count++;
 				}
-				n16 = utf8util::utf8to16_length((uint8_t*)&cstr, len, OPT_SKIP_INVALID);
-				if (count != n16) { printf("cstr = %i len = %i error\n", cstr, len); len = 10; break; }
+				n16 = utf8util::utf8to16_length((uint8_t*)&cstr, len, OPT);
+				result = utf8util::utf8_validation((uint8_t*)&cstr, len, OPT, &info);
+				if (result != RESULT_OK || count != n16 || info.length16 != n16) { printf("cstr = %lli len = %i error\n", cstr, len); len = 10; break; }
 			}
+			printf("len = %i\n", len);
 		}
 		printf("%s\n", len != 10 ? "success" : "error");
 	}
 	printf("TEST utf16_length for 4 bytes string\n");
 	{
-		uint16_t *src, len = 3;
-		uint32_t cstr, cp, src_length, count, bounds[] = { 1, 0x10000, 0xFFFFFFFF - 135 };
-		for (len = 0;len <= 2;len++)
+		uint16_t *src, len;
+		uint32_t cp, src_length, count;
+		uint64_t cstr;
+		for (len = 0;len <= 4;len++)
 		{
-			for (cstr = 0;cstr < bounds[len];cstr += 134)
+			for (cstr = 0;cstr < (1ULL << (len * 8));cstr += 134)
 			{
 				src_length = len; count = 0; src = (uint16_t*)&cstr;
 				while (src_length > 0)
@@ -313,7 +318,7 @@ int main()
 				n8 = utf8util::utf16to8_length((uint16_t*)&cstr, len, OPT);
 				result = utf8util::utf16to8((uint16_t*)&cstr, len, d8, n8, OPT);
 				n32 = utf8util::utf8to32_length(d8, n8, OPT);
-				if (count != n32 || result != RESULT_OK) { printf("cstr = %i len = %i error\n", cstr, len); len = 10; break; }
+				if (count != n32 || result != RESULT_OK) { printf("cstr = %lli len = %i error\n", cstr, len); len = 10; break; }
 			}
 		}
 		printf("%s\n", len != 10 ? "success" : "error");
