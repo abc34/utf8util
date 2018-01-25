@@ -57,70 +57,130 @@ namespace utf8util
 #define OPT_SKIP_INVALID      1
 #define OPT_BREAKON_INVALID   2
 
+	uint16_t utf8proc_sequences, utf8_stage1table, utf8_stage2table;
+	struct validation_info
+	{
+		uint8_t status;
+		uint32_t nerrors;
+		uint32_t length8;
+		uint32_t length16;
+		uint32_t length32;
+		void* src_next;
+	};
 
 	//counting the number uint16 nedeed to convert utf8 to utf16
 	//src_length - src length, uint8_t elements
-	//option     - OPTION_SKIP_INVALID or OPTION_REPLACE_INVALID
-	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
+	//option     - OPT_*
+	uint8_t utf8_validation(uint8_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
 	{
-		uint32_t ncount = 0, nerrors = 0;
-		while (src_length > 3)
+		uint8_t ret = RESULT_OK;
+		uint32_t ncount16 = 0, ncount32 = 0, nerrors = 0, src_len = src_length;
+		while (src_length > 0)
 		{
 			uint8_t c = *src++;
-			if (c < 0xC0 || c >= 0xF8) { src_length -= 1; goto on_ok; }
+			if (c < 0x80) { src_length -= 1; goto on_ok; }
+			else if (c < 0xC2 || c > 0xF4) { goto on_error_range; }
 			else if (c < 0xE0)
 			{
+				if (src_length < 2) { goto on_error_length; }
 				c = *src++;if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
 				src_length -= 2;
 				goto on_ok;
 			}
 			else if (c < 0xF0)
 			{
-				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
+				if (src_length < 3) { goto on_error_length; }
+				if (c == 0xE0) { c = *src++; if (c < 0xA0 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } }
+				else { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } }
 				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; }
 				src_length -= 3;
 				goto on_ok;
 			}
-			else if (c < 0xF8)
+			else if (c <= 0xF4)
 			{
-				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
+				if (src_length < 4) { goto on_error_length; }
+				if (c == 0xF0) { c = *src++; if (c < 0x90 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } }
+				else if (c < 0xF4) { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } }
+				else { c = *src++; if (c < 0x80 || c >= 0x90) { src_length -= 1; goto on_error_continuation; } }
+				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; }
+				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 3; goto on_error_continuation; }
+				src_length -= 4; ncount16++;
+				goto on_ok;
+			}
+		on_error_range:
+			src_length -= 1;
+			nerrors++;
+			if (option == OPT_BREAKON_INVALID) { ret = ERROR_UTF8_DECODE_RANGE; ncount32++; break; }
+			goto on_ok;
+		on_error_length:
+			src_length -= 1;
+			nerrors++;
+			if (option == OPT_BREAKON_INVALID) { ret = ERROR_SRC_LENGTH; ncount32++; break; }
+			goto on_ok;
+		on_error_continuation:
+			nerrors++;
+			src--;
+			if (option == OPT_BREAKON_INVALID) { ret = ERROR_UTF8_CONTINUATION_BYTE; ncount32++; break; }
+		on_ok:
+			ncount32++;
+		}
+		if (vi != nullptr)
+		{
+			ncount16 += ncount32;
+			if (option == OPT_SKIP_INVALID) { ncount16 -= nerrors; ncount32 -= nerrors; }
+			vi->length8 = src_len;
+			vi->length16 = ncount16;
+			vi->length32 = ncount32;
+			vi->nerrors = nerrors;
+			vi->src_next = src;
+			vi->status = ret;
+		}
+		return ret;
+	}
+	//counting the number uint16 nedeed to convert utf8 to utf16
+	//src_length - src length, uint8_t elements
+	//option     - OPTION_SKIP_INVALID or OPTION_REPLACE_INVALID
+	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
+	{
+		uint32_t ncount = 0, nerrors = 0;
+		while (src_length > 0)
+		{
+			uint8_t c = *src++;
+			if (c < 0x80) { src_length -= 1; goto on_ok; }
+			else if (c < 0xC2 || c > 0xF4) { src_length -= 1; goto on_error_range; }
+			else if (c < 0xE0)
+			{
+				if (src_length < 2) { src_length -= 1; goto on_error_range; }
+				c = *src++;if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
+				src_length -= 2;
+				goto on_ok;
+			}
+			else if (c < 0xF0)
+			{
+				if (src_length < 3) { src_length -= 1; goto on_error_range; }
+				if (c == 0xE0) { c = *src++; if (c < 0xA0 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } }
+				else { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } }
+				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; }
+				src_length -= 3;
+				goto on_ok;
+			}
+			else if (c <= 0xF4)
+			{
+				if (src_length < 4) { src_length -= 1; goto on_error_range; }
+				if (c == 0xF0) { c = *src++; if (c < 0x90 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } }
+				else if (c < 0xF4) { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } }
+				else { c = *src++; if (c < 0x80 || c >= 0x90) { src_length -= 1; goto on_error_continuation; } }
 				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; }
 				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 3; goto on_error_continuation; }
 				src_length -= 4; ncount++;
 				goto on_ok;
 			}
 		on_error_continuation:
-			src--; nerrors++;
+			src--;
+		on_error_range:
+			nerrors++;
 		on_ok:
 			ncount++;
-		}
-		//last less or equal 3 bytes
-		//because DECODE
-		//[length = 1] (x) ==> 1
-		//[length = 2] (1 x) or (e x) or (2 ~8) ==> 2 else (2 8), (3 x), (4 x) ==> 1
-		//[length = 3] (4 x x) ==> 1
-		//  else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
-		//  else (2 8 x) ==> 2 else (3 8 ~8) ==> 2 else (3 8 8) ==> 1.
-		if (src_length == 1) { ncount += 1; if (src[0] >= 0x80)nerrors++; }
-		else if (src_length == 2)
-		{
-			//test 2 bytes
-			if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
-			else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
-		}
-		else if (src_length == 3)
-		{
-			if (src[0] >= 0xF0 && src[0] < 0xF8) { ncount++; nerrors++; }
-			else if (src[0] < 0xC0 || src[0] >= 0xF8 || (src[1] & 0xC0) != 0x80)
-			{
-				ncount++; if (src[0] >= 0x80)nerrors++; src++;
-				//test 2 bytes
-				if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
-				else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
-			}
-			else if (src[0] < 0xE0) { ncount += 2; if (src[2] >= 0x80) nerrors++; }
-			else if ((src[2] & 0xC0) != 0x80) { ncount += 2; nerrors++; if (src[2] >= 0x80) nerrors++; }
-			else { ncount += 1; }
 		}
 		if (option == OPT_SKIP_INVALID) ncount -= nerrors;
 		return ncount;
@@ -153,63 +213,44 @@ namespace utf8util
 	uint32_t utf8to32_length(uint8_t* src, uint32_t src_length, uint8_t option)
 	{
 		uint32_t ncount = 0, nerrors = 0;
-		while (src_length > 3)
+		while (src_length > 0)
 		{
 			uint8_t c = *src++;
-			if (c < 0xC0 || c >= 0xF8) { src_length -= 1; goto on_ok; }
+			if (c < 0x80) { src_length -= 1; goto on_ok; }
+			else if (c < 0xC2 || c > 0xF4) { src_length -= 1; goto on_error_range; }
 			else if (c < 0xE0)
 			{
+				if (src_length < 2) { src_length -= 1; goto on_error_range; }
 				c = *src++;if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
 				src_length -= 2;
 				goto on_ok;
 			}
 			else if (c < 0xF0)
 			{
-				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
+				if (src_length < 3) { src_length -= 1; goto on_error_range; }
+				if (c == 0xE0) { c = *src++; if (c < 0xA0 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } }
+				else { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } }
 				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; }
 				src_length -= 3;
 				goto on_ok;
 			}
-			else if (c < 0xF8)
+			else if (c <= 0xF4)
 			{
-				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; }
+				if (src_length < 4) { src_length -= 1; goto on_error_range; }
+				if (c == 0xF0) { c = *src++; if (c < 0x90 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } }
+				else if (c < 0xF4) { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } }
+				else { c = *src++; if (c < 0x80 || c >= 0x90) { src_length -= 1; goto on_error_continuation; } }
 				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; }
 				c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 3; goto on_error_continuation; }
 				src_length -= 4;
 				goto on_ok;
 			}
 		on_error_continuation:
-			src--; nerrors++;
+			src--;
+		on_error_range:
+			nerrors++;
 		on_ok:
 			ncount++;
-		}
-		//last less or equal 3 bytes
-		//because DECODE
-		//[length = 1] (x) ==> 1
-		//[length = 2] (1 x) or (e x) or (2 ~8) ==> 2 else (2 8), (3 x), (4 x) ==> 1
-		//[length = 3] (4 x x) ==> 1
-		//  else (1 x x) or (e x x) or (2 ~8 x) or (3 ~8 x) ==> 1 and next [2]
-		//  else (2 8 x) ==> 2 else (3 8 ~8) ==> 2 else (3 8 8) ==> 1.
-		if (src_length == 1) { ncount += 1; if (src[0] >= 0x80)nerrors++; }
-		else if (src_length == 2)
-		{
-			//test 2 bytes
-			if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
-			else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
-		}
-		else if (src_length == 3)
-		{
-			if (src[0] >= 0xF0 && src[0] < 0xF8) { ncount++; nerrors++; }
-			else if (src[0] < 0xC0 || src[0] >= 0xF8 || (src[1] & 0xC0) != 0x80)
-			{
-				ncount++; if (src[0] >= 0x80)nerrors++; src++;
-				//test 2 bytes
-				if (src[0] < 0xC0 || src[0] >= 0xF8 || src[0] >= 0xC0 && src[0] < 0xE0 && (src[1] & 0xC0) != 0x80) { ncount += 2; if (src[0] >= 0x80) nerrors++; if (src[1] >= 0x80) nerrors++; }
-				else { ncount += 1; if (src[0] >= 0xE0) nerrors += 1; }
-			}
-			else if (src[0] < 0xE0) { ncount += 2; if (src[2] >= 0x80) nerrors++; }
-			else if ((src[2] & 0xC0) != 0x80) { ncount += 2; nerrors++; if (src[2] >= 0x80) nerrors++; }
-			else { ncount += 1; }
 		}
 		if (option == OPT_SKIP_INVALID) ncount -= nerrors;
 		return ncount;
@@ -231,12 +272,12 @@ namespace utf8util
 		}
 		return ncount;
 	}
-
+	//cp = |00..7F|80..7FF|800..FFFF|10000..10FFFF|
 #define UTF8_DECODE(cp, src, src_length, option) \
 		uint8_t c = *src++; \
 		if (c < 0x80) { cp = static_cast<uint32_t>(c); src_length--; goto on_ok;} \
-		if (c < 0xC0) { goto on_error_range;} \
-		if (c < 0xE0) \
+		else if (c < 0xC2 || c > 0xF4) { goto on_error_range;} \
+		else if (c < 0xE0) \
 		{ \
 			if (src_length < 2) { goto on_error_length; } \
 			cp = static_cast<uint32_t>(c & 0x1F) << 6; \
@@ -245,22 +286,25 @@ namespace utf8util
 			src_length -= 2; \
 			goto on_ok; \
 		} \
-		if (c < 0xF0) \
+		else if (c < 0xF0) \
 		{ \
 			if (src_length < 3) { goto on_error_length; } \
 			cp = static_cast<uint32_t>(c & 0x0F) << 12; \
-			c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } \
+			if( c == 0xE0) { c = *src++; if (c < 0xA0 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } } \
+			else { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } } \
 			cp |= static_cast<uint32_t>(c & 0x3F) << 6; \
 			c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; } \
 			cp |= static_cast<uint32_t>(c & 0x3F); \
 			src_length -= 3; \
 			goto on_ok; \
 		} \
-		if (c < 0xF8) \
+		else if (c <= 0xF4) \
 		{ \
 			if (src_length < 4) { goto on_error_length; } \
 			cp = static_cast<uint32_t>(c & 0x07) << 18; \
-			c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } \
+			if(c == 0xF0) { c = *src++; if (c < 0x90 || c >= 0xC0) { src_length -= 1; goto on_error_continuation; } } \
+			else if(c < 0xF4) { c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 1; goto on_error_continuation; } } \
+			else { c = *src++; if (c < 0x80 || c >= 0x90) { src_length -= 1; goto on_error_continuation; } } \
 			cp |= static_cast<uint32_t>(c & 0x3F) << 12; \
 			c = *src++; if ((c & 0xC0) != 0x80) { src_length -= 2; goto on_error_continuation; } \
 			cp |= static_cast<uint32_t>(c & 0x3F) << 6; \
@@ -270,11 +314,11 @@ namespace utf8util
 			goto on_ok; \
 		} \
 on_error_range: \
-		if (option == OPT_BREAKON_INVALID)return ERROR_UTF8_DECODE_RANGE; src_length--; if(option == OPT_SKIP_INVALID)continue; cp = R_CHAR; goto on_ok; \
+		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_DECODE_RANGE; } src_length--; if(option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; goto on_ok; \
 on_error_length: \
-		if (option == OPT_BREAKON_INVALID)return ERROR_SRC_LENGTH; src_length = 0; if(option == OPT_SKIP_INVALID)continue; cp = R_CHAR; goto on_ok; \
+		if (option == OPT_BREAKON_INVALID) { return ERROR_SRC_LENGTH; } src_length--; if(option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; goto on_ok; \
 on_error_continuation: \
-		if (option == OPT_BREAKON_INVALID)return ERROR_UTF8_CONTINUATION_BYTE; src--; if(option == OPT_SKIP_INVALID)continue; cp = R_CHAR; \
+		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_CONTINUATION_BYTE; } src--; if(option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; \
 on_ok:
 
 #define UTF8_ENCODE(cp, dst, dst_length, option) \
@@ -310,8 +354,8 @@ on_ok:
 	else \
 	{ \
 		/*on error emit replacement codepoint U+FFFD utf8->[EF BF BD] or U+FFFF utf8->[EF BF BF]*/ \
-		if (option == OPT_BREAKON_INVALID) return ERROR_UTF8_ENCODE_RANGE; \
-		if (option == OPT_SKIP_INVALID) continue; \
+		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_ENCODE_RANGE; } \
+		if (option == OPT_SKIP_INVALID) { continue; } \
 		if (dst_length < 3) { return ERROR_DST_LENGTH; } \
 		*dst++ = R_CHAR_UTF8_0; \
 		*dst++ = R_CHAR_UTF8_1; \
@@ -322,7 +366,7 @@ on_ok:
 #define UTF16_DECODE(cp, src, src_length, option) \
 	uint16_t c = *src++; \
 	/*if (need_swap) c = static_cast<uint16_t>(((c & 0xFF) << 8) | (c >> 8));*/ \
-	if (c < 0xD800 || c > 0xDFFF) { cp = static_cast<uint32_t>(c); src_length--; goto on_ok_16; } \
+	if (c < 0xD800 || c >= 0xDC00) { cp = static_cast<uint32_t>(c); src_length--; goto on_ok_16; } \
 	else if (c < 0xDC00) \
 	{ \
 		if (src_length < 2) { goto on_error_length_16; }\
@@ -335,21 +379,21 @@ on_ok:
 		goto on_ok_16; \
 	} \
 /*on_error_range:*/ \
-	if (option == OPT_BREAKON_INVALID)return ERROR_UTF16_DECODE_RANGE; src_length--; if(option == OPT_SKIP_INVALID) continue; cp = R_CHAR; goto on_ok_16; \
+	if (option == OPT_BREAKON_INVALID) { return ERROR_UTF16_DECODE_RANGE; } src_length--; if(option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; goto on_ok_16; \
 on_error_length_16: \
-	if (option == OPT_BREAKON_INVALID)return ERROR_SRC_LENGTH; src_length = 0; if(option == OPT_SKIP_INVALID) continue; cp = R_CHAR; goto on_ok_16; \
+	if (option == OPT_BREAKON_INVALID) { return ERROR_SRC_LENGTH; } src_length = 0; if(option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; goto on_ok_16; \
 on_error_continuation_16: \
-	if (option == OPT_BREAKON_INVALID)return ERROR_UTF16_CONTINUATION_WORD; src--; if(option == OPT_SKIP_INVALID) continue; cp = R_CHAR; \
+	if (option == OPT_BREAKON_INVALID) { return ERROR_UTF16_CONTINUATION_WORD; } src--; if(option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; \
 on_ok_16:
 
 #define UTF16_ENCODE(cp, dst, dst_length, option) \
 	if (dst_length == 0) { return ERROR_DST_LENGTH; } \
 	if (cp < 0xD800) { *dst++ = static_cast<uint16_t>(cp); dst_length--; } \
-	else if (cp < 0xE000) \
+	else if (cp < 0xDC00) \
 	{ \
 		/*codepoint in ranges U+D800..U+DBFF and U+DC00..U+DFFF is reserved for utf16 surrogate pairs */ \
-		if (option == OPT_BREAKON_INVALID) return ERROR_UTF16_ENCODE_RANGE; \
-		if (option == OPT_SKIP_INVALID) continue; \
+		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF16_ENCODE_RANGE; } \
+		if (option == OPT_SKIP_INVALID) { continue; } \
 		*dst++ = R_CHAR; dst_length--; \
 	} \
 	else if (cp < 0x10000) \
@@ -368,19 +412,19 @@ on_ok_16:
 	else \
 	{ \
 		/*on error emit replacement codepoint*/ \
-		if (option == OPT_BREAKON_INVALID) return ERROR_UTF16_ENCODE_RANGE; \
-		if (option == OPT_SKIP_INVALID) continue; \
+		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF16_ENCODE_RANGE; } \
+		if (option == OPT_SKIP_INVALID) { continue; } \
 		*dst++ = R_CHAR; dst_length--; \
 	}
 
 #define UTF32_DECODE(cp, src, src_length, option) \
 	cp = *src++; src_length--; \
 	/*if (need_swap) cp = ((cp & 0xFF) << 24) | ((cp & 0xFF00) << 8) | ((cp & 0xFF0000) >> 8) | (cp >> 24);*/ \
-	if (cp >= 0x110000) { if (option == OPT_BREAKON_INVALID) return ERROR_UTF32_DECODE_RANGE; if (option == OPT_SKIP_INVALID) continue; cp = R_CHAR; }
+	if (cp >= 0x110000) { if (option == OPT_BREAKON_INVALID) { return ERROR_UTF32_DECODE_RANGE; } if (option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; }
 
 #define UTF32_ENCODE(cp, dst, dst_length, option) \
 	if (dst_length == 0) { return ERROR_DST_LENGTH; } \
-	if (cp >= 0x110000) { if (option == OPT_BREAKON_INVALID) return ERROR_UTF32_ENCODE_RANGE; if (option == OPT_SKIP_INVALID) continue; cp = R_CHAR; } \
+	if (cp >= 0x110000) { if (option == OPT_BREAKON_INVALID) { return ERROR_UTF32_ENCODE_RANGE; } if (option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; } \
 	*dst++ = cp; dst_length--;
 
 	//convert utf8 string to utf32 string
@@ -443,6 +487,21 @@ on_ok_16:
 			UTF8_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
+	}
+
+	uint16_t utf16toupper(uint32_t cp)
+	{
+		//utf8proc_get_property(uc)
+		//uc < 0 || uc >= 0x110000 ? utf8proc_properties : unsafe_get_property(uc)
+
+		//unsafe_get_property(uc)
+		//return utf8proc_properties + (
+		//	utf8proc_stage2table[
+		//		utf8proc_stage1table[uc >> 8] + (uc & 0xFF)
+		//	]);
+		//utf8proc_int32_t cu = utf8proc_get_property(c)->uppercase_seqindex;
+		//return cu != UINT16_MAX ? seqindex_decode_index(cu) : c;
+		return 0;
 	}
 
 	/*
