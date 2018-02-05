@@ -69,7 +69,6 @@ namespace utf8util
 #define OPT_SKIP_INVALID      1
 #define OPT_BREAKON_INVALID   2
 
-	uint16_t utf8proc_sequences, utf8_stage1table, utf8_stage2table;
 	struct validation_info
 	{
 		uint8_t status;
@@ -549,52 +548,48 @@ on_ok:
 #define UTF8_NEXT(i, src, src_length, cp, option) \
 	{ \
 		uint8_t __c = src[i++]; \
-		if (__c < 0x80) { cp = uint32_t(__c); goto on_ok;} \
-		else if (__c < 0xC2 || __c > 0xF4) { goto on_error_range;} \
+		if (__c < 0x80) { cp = __c; goto on_ok; } \
+		else if (__c < 0xC2 || __c > 0xF4) { goto on_error_range; } \
 		else if (__c < 0xE0) \
 		{ \
 			if (i >= src_length) { goto on_error_range; } \
 			cp = uint32_t(__c & 0x1F) << 6; \
 			__c = src[i];if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } \
-			cp |= uint32_t(__c & 0x3F); \
-			i++; \
+			cp |= (__c & 0x3F); i++; \
 			goto on_ok; \
 		} \
 		else if (__c < 0xF0) \
 		{ \
-			if (i > src_length) { goto on_error_range; } \
+			if (i + 1 >= src_length) { goto on_error_range; } \
 			cp = uint32_t(__c & 0x0F) << 12; \
-			if( __c == 0xE0) { __c = src[i]; if (__c < 0xA0 || __c > 0xBF) { goto on_error_continuation; } } \
+			if (__c == 0xE0) { __c = src[i]; if (__c < 0xA0 || __c > 0xBF) { goto on_error_continuation; } } \
 			else if (__c == 0xED) { __c = src[i]; if (__c < 0x80 || __c > 0x9F) { goto on_error_continuation; } } \
 			else { __c = src[i]; if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } } \
 			cp |= uint32_t(__c & 0x3F) << 6; i++; \
 			__c = src[i]; if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } \
-			cp |= uint32_t(__c & 0x3F); \
-			i++; \
+			cp |= (__c & 0x3F); i++; \
 			goto on_ok; \
 		} \
-		else if (__c <= 0xF4) \
+		else /*if (__c <= 0xF4)*/ \
 		{ \
-			if (i + 1 > src_length) { goto on_error_range; } \
+			if (i + 2 >= src_length) { goto on_error_range; } \
 			cp = uint32_t(__c & 0x07) << 18; \
-			if(__c == 0xF0) { __c = src[i]; if (__c < 0x90 || __c > 0xBF) { goto on_error_continuation; } } \
-			else if(__c < 0xF4) { __c = src[i]; if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } } \
+			if (__c == 0xF0) { __c = src[i]; if (__c < 0x90 || __c > 0xBF) { goto on_error_continuation; } } \
+			else if (__c < 0xF4) { __c = src[i]; if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } } \
 			else { __c = src[i]; if (__c < 0x80 || __c > 0x8F) { goto on_error_continuation; } } \
 			cp |= uint32_t(__c & 0x3F) << 12; i++; \
 			__c = src[i]; if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } \
 			cp |= uint32_t(__c & 0x3F) << 6; i++; \
 			__c = src[i]; if ((__c & 0xC0) != 0x80) { goto on_error_continuation; } \
-			cp |= uint32_t(__c & 0x3F); \
-			i++; \
+			cp |= (__c & 0x3F); i++; \
 			goto on_ok; \
 		} \
 	} \
 on_error_range: \
-		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_DECODE_RANGE; } \
-		if (option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; goto on_ok; \
+	if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_DECODE_RANGE; } \
 on_error_continuation: \
-		if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_CONTINUATION_BYTE; } \
-		if (option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; \
+	if (option == OPT_BREAKON_INVALID) { return ERROR_UTF8_CONTINUATION_BYTE; } \
+	if (option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; \
 on_ok:
 
 #define UTF8_ENCODE(cp, dst, dst_length, option) \
@@ -717,6 +712,11 @@ on_ok_16:
 		if (option == OPT_REPLACE_INVALID) { *dst++ = R_CHAR; dst_length--; } \
 	}
 
+#define UTF32_NEXT(i, src, src_length, cp, option) \
+	cp = src[i++]; \
+	/*if (need_swap) cp = ((cp & 0xFF) << 24) | ((cp & 0xFF00) << 8) | ((cp & 0xFF0000) >> 8) | (cp >> 24);*/ \
+	if ((cp & 0xF800) == 0xD800 || cp > 0x10FFFF) { if (option == OPT_BREAKON_INVALID) { return ERROR_UTF32_DECODE_RANGE; } if (option == OPT_SKIP_INVALID) { continue; } cp = R_CHAR; }
+
 #define UTF32_DECODE(cp, src, src_length, option) \
 	cp = *src++; src_length--; \
 	/*if (need_swap) cp = ((cp & 0xFF) << 24) | ((cp & 0xFF00) << 8) | ((cp & 0xFF0000) >> 8) | (cp >> 24);*/ \
@@ -732,12 +732,12 @@ on_ok_16:
 	//dst_length - dst string length, uint32_t elements
 	uint8_t utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t option)
 	{
-		uint32_t cp;
+		uint32_t i = 0, cp;
 		//test BOM: 0xEF,0xBB,0xBF and skip it
 		//if (src_length > 2 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; src_length -= 3; }
-		while (src_length > 0)
+		while (i < src_length)
 		{
-			UTF8_DECODE(cp, src, src_length, option);
+			UTF8_NEXT(i, src, src_length, cp, option);
 			UTF32_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
@@ -747,12 +747,12 @@ on_ok_16:
 	//dst_length - dst string length, uint8_t elements
 	uint8_t utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 	{
-		uint32_t cp;
+		uint32_t i = 0, cp;
 		//test BOM: 0x0000FEFF and skip it
 		//if (src_length > 0 && src[0] == 0x0000FEFF) { src++; src_length--; }
-		while (src_length > 0)
+		while (i < src_length)
 		{
-			UTF32_DECODE(cp, src, src_length, option);
+			UTF32_NEXT(i, src, src_length, cp, option);
 			UTF8_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
@@ -762,12 +762,12 @@ on_ok_16:
 	//dst_length - dst string length, uint16_t elements
 	uint8_t utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t option)
 	{
-		uint32_t cp;
+		uint32_t i = 0, cp;
 		//test BOM: 0xEF,0xBB,0xBF and skip it
 		//if (src_length > 2 && src[0] == 0xEF && src[1] == 0xBB && src[2] == 0xBF) { src += 3; src_length -= 3; }
-		while (src_length > 0)
+		while (i < src_length)
 		{
-			UTF8_DECODE(cp, src, src_length, option);
+			UTF8_NEXT(i, src, src_length, cp, option);
 			UTF16_ENCODE(cp, dst, dst_length, OPT_SKIP_INVALID);
 		}
 		return RESULT_OK;
@@ -777,7 +777,7 @@ on_ok_16:
 	//dst_length - dst string length, uint8_t elements
 	uint8_t utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 	{
-		uint32_t cp, i = 0;
+		uint32_t i = 0, cp;
 		//test BOM: 0xFEFF and skip it
 		//if (src_length > 0 && src[0] == 0xFEFF) { src++; src_length--; }
 		while (i < src_length)
