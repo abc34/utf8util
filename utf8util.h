@@ -69,6 +69,7 @@ namespace utf8util
 #define OPT_SKIP_INVALID      1
 #define OPT_BREAKON_INVALID   2
 
+
 	struct validation_info
 	{
 		uint8_t status;
@@ -79,161 +80,6 @@ namespace utf8util
 		void* src_next;
 	};
 
-	//get length in `nc` and error code in `ret`
-	//  of first one character which utf8 encoded
-	//  as byte sequence in `src`;
-	//  no check src length;
-	//src - uint8_t*,[in]  pointer to utf8 byte sequence
-	//nc  - uint8_t, [out] number byte in utf8 coded character
-	//ret - uint8_t, [out] error code
-#define UTF8_CHAR_WIDTH_1(src, nc, ret) \
-	{ \
-		uint8_t c = *src; nc = 1; ret = RESULT_OK; \
-		if (c < 0x80); \
-		else if (c < 0xC2 || c > 0xF4) { ret = ERROR_UTF8_DECODE_RANGE; } \
-		else if (c < 0xE0) \
-		{ \
-			if ((src[1] & 0xC0) == 0x80) { nc = 2; } \
-			else { ret = ERROR_UTF8_CONTINUATION_BYTE; } \
-		} \
-		else if (c < 0xF0) \
-		{ \
-			(c == 0xE0) && (src[1] & 0xE0) != 0xA0 || (c != 0xE0) && (src[1] & 0xC0) != 0x80 ? \
-				(ret = ERROR_UTF8_CONTINUATION_BYTE) : \
-				(src[2] & 0xC0) != 0x80 ? (ret = ERROR_UTF8_CONTINUATION_BYTE) && (nc = 2) : \
-				(nc = 3); \
-		} \
-		else /*if (c <= 0xF4)*/ \
-		{ \
-			(c == 0xF0) && (src[1] < 0x90 || src[1] >= 0xC0) || ((c & 3) != 0) && (src[1] & 0xC0) != 0x80 || \
-				(c == 0xF4) && (src[1] < 0x80 || src[1] >= 0x90) ? (ret = ERROR_UTF8_CONTINUATION_BYTE) : \
-				(src[2] & 0xC0) != 0x80 ? (ret = ERROR_UTF8_CONTINUATION_BYTE) && (nc = 2) : \
-				(src[3] & 0xC0) != 0x80 ? (ret = ERROR_UTF8_CONTINUATION_BYTE) && (nc = 3) : \
-				(nc = 4); \
-		} \
-	}
-
-	const static uint8_t UTF8_CHAR_WIDTH[256] =
-	{
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x1F
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x3F
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x5F
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x7F
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x9F
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xBF
-		0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
-		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, // 0xDF
-		3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, // 0xEF
-		4, 4, 4, 4, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0xFF
-	};
-#define UTF8_CHAR_WIDTH(src, nc, ret, LABEL) \
-	{ \
-		uint8_t c = *src++; \
-		nc = UTF8_CHAR_WIDTH[c]; \
-		switch(nc) \
-		{ \
-			case 1: \
-				ret = RESULT_OK; \
-				goto exit##LABEL; \
-			case 2: \
-				if (((*src++) & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } \
-				ret = RESULT_OK; \
-				goto exit##LABEL; \
-			case 3: \
-				if (c == 0xE0) { c = *src++; if (c < 0xA0 || c >= 0xC0) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } } \
-				else { c = *src++; if ((c & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } } \
-				c = *src++; if ((c & 0xC0) != 0x80) { nc = 2; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } \
-				ret = RESULT_OK; \
-				goto exit##LABEL; \
-			case 4: \
-				if (c == 0xF0) { c = *src++; if (c < 0x90 || c >= 0xC0) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } } \
-				else if (c < 0xF4) { c = *src++; if ((c & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } } \
-				else { c = *src++; if (c < 0x80 || c >= 0x90) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } } \
-				if (((*src++) & 0xC0) != 0x80) { nc = 2; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } \
-				if (((*src++) & 0xC0) != 0x80) { nc = 3; ret = ERROR_UTF8_CONTINUATION_BYTE; src--; goto exit##LABEL; } \
-				ret = RESULT_OK; \
-				goto exit##LABEL; \
-			case 0: \
-				nc = 1; ret = ERROR_UTF8_DECODE_RANGE; goto exit##LABEL; \
-				goto exit##LABEL; \
-		} \
-		\
-	} \
-exit##LABEL:
-
-	//if (c < 0x80) { nc = 1; ret = RESULT_OK; } \
-	//else if (c < 0xC2 || c > 0xF4) { nc = 1; ret = ERROR_UTF8_DECODE_RANGE; goto exit##LABEL; } \
-	//	else if (c < 0xE0) \
-	//	{ \
-	//		if ((src[1] & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } \
-	//		nc = 2; ret = RESULT_OK; \
-	//	} \
-	//	else if (c < 0xF0) \
-	//	{ \
-	//		if (c == 0xE0) { c = src[1]; if (c < 0xA0 || c >= 0xC0) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } } \
-	//		else { c = src[1]; if ((c & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } } \
-	//		c = src[2]; if ((c & 0xC0) != 0x80) { nc = 2; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } \
-	//		nc = 3; ret = RESULT_OK; \
-	//	} \
-	//	else /*if (c <= 0xF4)*/ \
-	//	{ \
-	//		if (c == 0xF0) { c = src[1]; if (c < 0x90 || c >= 0xC0) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } } \
-	//		else if (c < 0xF4) { c = src[1]; if ((c & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } } \
-	//		else { c = src[1]; if (c < 0x80 || c >= 0x90) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } } \
-	//		c = src[2]; if ((c & 0xC0) != 0x80) { nc = 2; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } \
-	//		c = src[3]; if ((c & 0xC0) != 0x80) { nc = 3; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit##LABEL; } \
-	//		nc = 4; ret = RESULT_OK; \
-	//	} \
-
-
-	//for test
-	uint8_t utf8char_length_unsafe_1(uint8_t* src, uint32_t* dst_length)
-	{
-		uint8_t nc, ret, c = *src;
-		if (c < 0x80) { nc = 1; ret = RESULT_OK; }
-		else if (c < 0xC2 || c > 0xF4) { nc = 1; ret = ERROR_UTF8_DECODE_RANGE; goto exit; }
-		else if (c < 0xE0)
-		{
-			if ((src[1] & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; }
-			nc = 2; ret = RESULT_OK;
-		}
-		else if (c < 0xF0)
-		{
-			if (c == 0xE0) { c = src[1]; if (c < 0xA0 || c >= 0xC0) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; } }
-			else { c = src[1]; if ((c & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; } }
-			c = src[2]; if ((c & 0xC0) != 0x80) { nc = 2; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; }
-			nc = 3; ret = RESULT_OK;
-		}
-		else /*if (c <= 0xF4)*/
-		{
-			if (c == 0xF0) { c = src[1]; if (c < 0x90 || c >= 0xC0) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; } }
-			else if (c < 0xF4) { c = src[1]; if ((c & 0xC0) != 0x80) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; } }
-			else { c = src[1]; if (c < 0x80 || c >= 0x90) { nc = 1; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; } }
-			c = src[2]; if ((c & 0xC0) != 0x80) { nc = 2; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; }
-			c = src[3]; if ((c & 0xC0) != 0x80) { nc = 3; ret = ERROR_UTF8_CONTINUATION_BYTE; goto exit; }
-			nc = 4; ret = RESULT_OK;
-		}
-	exit:
-		*dst_length = nc;
-		return ret;
-	}
-
-
-
-
-
-
-
-
-
-
-
 
 	//checking UTF8 string for validity
 	//also counting the number uint16 and uint32 data elements nedeed to convert utf8 to utf16 and utf32
@@ -241,7 +87,8 @@ exit##LABEL:
 	//option     - OPT_*, for OPT_BREAKON_INVALID return validity status on first error
 	//vi         - ptr to validation_info struct, or nullptr
 	//return RESULT_OK on success or ERROR_UTF8_* on error occurs
-	uint8_t utf8_validation(uint8_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
+	uint8_t
+	utf8_validation(uint8_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
 	{
 		uint8_t ret = RESULT_OK;
 		uint32_t ncount32 = 0, ncount16 = 0, nerrors = 0, len = src_length;
@@ -309,7 +156,8 @@ exit##LABEL:
 	//option     - OPT_*, for OPT_BREAKON_INVALID return validity status on first error
 	//vi         - ptr to validation_info struct, or nullptr
 	//return RESULT_OK on success or ERROR_UTF16_* on error occurs
-	uint8_t utf16_validation(uint16_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
+	uint8_t
+	utf16_validation(uint16_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
 	{
 		uint8_t ret = RESULT_OK;
 		uint16_t c, *src_end = src + src_length;
@@ -350,10 +198,32 @@ exit##LABEL:
 		return ret;
 	}
 
+
+
+
+	//counting the number uint16 data elements nedeed to convert utf8 to utf16
+	//src_length - src length, uint8_t elements
+	//unsafe, for valid utf8, but fast
+	__inline uint32_t
+	utf8to16_length_unsafe(uint8_t* src, uint32_t src_length)
+	{
+		uint32_t i = 0, ncount = 0;
+		while (i < src_length)
+		{
+			uint8_t c = src[i];
+			if (c < 0x80) { i += 1; }
+			else if (c < 0xE0) { i += 2; }
+			else if (c == 0xE0) { i += 3; }
+			else { i += 4; ncount++; }
+			ncount++;
+		}
+		return ncount;
+	}
 	//counting the number uint16 data elements nedeed to convert utf8 to utf16
 	//src_length - src length, uint8_t elements
 	//option     - OPT_*
-	uint32_t utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
+	uint32_t
+	utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
 	{
 		uint32_t ncount = 0, nerrors = 0;
 		while (src_length > 0)
@@ -404,13 +274,14 @@ exit##LABEL:
 	//counting the number uint8 data elements nedeed to convert utf16 to utf8
 	//src_length - src length, uint16_t elements
 	//option     - OPT_*
-	uint32_t utf16to8_length(uint16_t* src, uint32_t src_length, uint8_t option)
+	uint32_t
+	utf16to8_length(uint16_t* src, uint32_t src_length, uint8_t option)
 	{
-		uint16_t c, *src_end = src + src_length;
+		uint16_t *src_end = src + src_length;
 		uint32_t ncount = 0;
 		while (src < src_end)
 		{
-			c = *src++;
+			uint16_t c = *src++;
 			if (c < 0x0080) { ncount += 1; }
 			else if (c < 0x0800) { ncount += 2; }
 			else if (c < 0xD800 || c > 0xDFFF) { ncount += 3; }
@@ -423,10 +294,30 @@ exit##LABEL:
 		}
 		return ncount;
 	}
+
+	//counting the number uint32 data elements nedeed to convert utf8 to utf32
+	//src_length - src length, uint8_t elements
+	//unsafe, for valid utf8, but fast
+	__inline uint32_t
+	utf8to32_length_unsafe(uint8_t* src, uint32_t src_length)
+	{
+		uint32_t i = 0, ncount = 0;
+		while (i < src_length)
+		{
+			uint8_t c = src[i];
+			if (c < 0x80) { i += 1; }
+			else if (c < 0xE0) { i += 2; }
+			else if (c == 0xE0) { i += 3; }
+			else { i += 4; }
+			ncount++;
+		}
+		return ncount;
+	}
 	//counting the number uint32 data elements nedeed to convert utf8 to utf32
 	//src_length - src length, uint8_t elements
 	//option     - OPT_*
-	uint32_t utf8to32_length(uint8_t* src, uint32_t src_length, uint8_t option)
+	uint32_t
+	utf8to32_length(uint8_t* src, uint32_t src_length, uint8_t option)
 	{
 		uint32_t ncount = 0, nerrors = 0;
 		while (src_length > 0)
@@ -476,7 +367,8 @@ exit##LABEL:
 	//counting the number uint8 nedeed to convert utf32 to utf8
 	//src_length - src length, uint32_t elements
 	//option     - OPT_*
-	uint32_t utf32to8_length(uint32_t* src, uint32_t src_length, uint8_t option)
+	uint32_t
+	utf32to8_length(uint32_t* src, uint32_t src_length, uint8_t option)
 	{
 		uint32_t ncount = 0;
 		uint32_t c, *src_end = src + src_length;
@@ -730,7 +622,8 @@ on_ok_16:
 	//convert utf8 string to utf32 string
 	//src_length - src string length, uint8_t elements
 	//dst_length - dst string length, uint32_t elements
-	uint8_t utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t option)
+	uint8_t
+	utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t i = 0, cp;
 		//test BOM: 0xEF,0xBB,0xBF and skip it
@@ -745,7 +638,8 @@ on_ok_16:
 	//convert utf32 string to utf8 string
 	//src_length - src string length, uint32_t elements
 	//dst_length - dst string length, uint8_t elements
-	uint8_t utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
+	uint8_t
+	utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t i = 0, cp;
 		//test BOM: 0x0000FEFF and skip it
@@ -760,7 +654,8 @@ on_ok_16:
 	//convert utf8 string to utf16 string
 	//src_length - src string length, uint8_t elements
 	//dst_length - dst string length, uint16_t elements
-	uint8_t utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t option)
+	uint8_t
+	utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t i = 0, cp;
 		//test BOM: 0xEF,0xBB,0xBF and skip it
@@ -775,7 +670,8 @@ on_ok_16:
 	//convert utf16 string to utf8 string
 	//src_length - src string length, uint16_t elements
 	//dst_length - dst string length, uint8_t elements
-	uint8_t utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
+	uint8_t
+	utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 	{
 		uint32_t i = 0, cp;
 		//test BOM: 0xFEFF and skip it
