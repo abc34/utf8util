@@ -7,12 +7,11 @@
 
 namespace LZ
 {
-	
 
-	class vec
+	class membuffer
 	{
 	public:
-		vec() :_p(0), _size(0) {}
+		membuffer() :_p(0), _size(0) {}
 	private:
 		void*    _p;
 		uint32_t _size;
@@ -814,16 +813,15 @@ on_ok_16:
 		//All data blocks inside pages have data_alignment = sizeof(void*) = 4 bytes (x86-32) or 8 bytes (x86-64).
 		//Data structure:
 		//        | page header   | data header 0 | data block 0 | data header 1 | data block 1 | ... |data header n | unused block   |last data header |
-		//x86-32: | 32*4=128 bytes| 2*4=8 bytes   |              |   8 or 16     |              | ... |  8 or 16     |                |    8 or 16      |
-		//x86-64: | 32*8=256 bytes| 2*8=16 bytes  |              |    bytes      |              | ... |   bytes      |                |      bytes      |
+		//x86-32: | 32*4=128 bytes| 2*4=8 bytes   |              |   8 bytes     |              | ... |   8 bytes    | *next_, *prev_ |    8 bytes      |
+		//x86-64: | 32*8=256 bytes| 2*8=16 bytes  |              |  16 bytes     |              | ... |  16 bytes    |                |   16 bytes      |
 		//        |-------------------------------|------------------------------|-----------------------------------|----------------|-----------------|
 		//   ptr: |page_ptr                       |ptr0                          |ptr1                               |                |                 |page_ptr +
 		//        |                               |                              |                                   |                |                 | page_size
 		//        --------------------------------------------------------------------------------------------------------------------------------------|
 		//
 
-
-		//enum data_constant
+		//enum
 		//{
 		//	data_alignment = sizeof(void*),
 		//	data_alignment_mask = ~(data_alignment - 1),
@@ -839,14 +837,7 @@ on_ok_16:
 #define unused_header_bytes  (sizeof(struct data_header) - data_header_offset)
 #define page_header_bytes    sizeof(struct page_header)
 #define min_block_size       sizeof(struct data_header)
-
 #define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
-//#define get_first_unused_block_by_size(_size) [this](register int64_t size) \
-//		{\
-//			register union { double d; int64_t i; }v = { (double)size }; \
-//			v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0; \
-//			return &this->_pool_ptr->unused_ptr[v.i]; \
-//		}(_size)
 
 		struct page_header
 		{
@@ -878,12 +869,23 @@ on_ok_16:
 			~page_manager()
 			{
 				if (_pool_ptr != 0)
-				{
 					allocator::free(_pool_ptr);
-				}
 			}
+			size_t get_used_size()
+			{//return total used memory of pool
+				data_header *p = cast_data_header(_pool_ptr, page_header_bytes);
+				size_t size, total = page_header_bytes + data_header_offset;
+				while (p && p->size > 1)
+				{
+					size = p->size & data_alignment_mask;
+					if (p->size & 1)total += size;
+					p = cast_data_header(p, size);
+				}
+				return total;
+			};
+		private:
 			bool create_with_pool(void* pool, size_t size)
-			{
+			{//create memory pool
 				_pool_ptr = 0;
 				_pool_size = 0;
 				if (pool == 0
@@ -906,19 +908,6 @@ on_ok_16:
 				p_last->prev = p;
 				return true;
 			};
-			size_t get_used_size()
-			{//return total used memory of pool
-				data_header *p = cast_data_header(_pool_ptr, page_header_bytes);
-				size_t size, total = page_header_bytes + data_header_offset;
-				while (p && p->size > 1)
-				{
-					size = p->size & data_alignment_mask;
-					if (p->size & 1)total += size;
-					p = cast_data_header(p, size);
-				}
-				return total;
-			};
-		private:
 			inline data_header** get_first_unused_block_by_size(register size_t size)
 			{
 				//index = ilog2(size)
@@ -971,13 +960,15 @@ on_ok_16:
 		public:
 			size_t msize(void* ptr)
 			{//return capacity of used data block
+				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
-				data_header *p = cast_data_header(ptr, -ptrdiff_t(data_header_offset));
+				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_offset : 0;
 			};
 			void* malloc(size_t size)
 			{
-				if (_pool_ptr == 0 || size == 0)return 0;
+				assert(_pool_ptr != 0);
+				if (size == 0)return 0;
 
 				//align size
 				size_t size_aligned = (size + data_header_offset + data_alignment - 1) & data_alignment_mask;
@@ -997,11 +988,11 @@ on_ok_16:
 				//!!!here you can set the margin for the data block
 				if (unused - size_aligned < unused_header_bytes)
 				{
-					//если в unused-size_aligned нельзя вместить unused_header,
+					//если в unused - size_aligned нельзя вместить unused_header,
 					//то весь unused block выделим для data block
 
 					//set new data block
-					p->size = unused | 1;
+					p->size |= 1;
 				}
 				else
 				{
@@ -1027,12 +1018,13 @@ on_ok_16:
 			};
 			void free(void* ptr)
 			{
+				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
 				{
 					allocator::free(ptr); return;
 				}
 
-				data_header *p = cast_data_header(ptr, -ptrdiff_t(data_header_offset));
+				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 
 				//!!! при такой стратегии слева и справа от data block
 				//!!! может быть только один unused block
