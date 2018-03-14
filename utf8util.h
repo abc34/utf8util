@@ -5,18 +5,34 @@
 #include <assert.h>
 #include <intrin.h>
 
+
 namespace LZ
 {
-
-	class membuffer
-	{
-	public:
-		membuffer() :_p(0), _size(0) {}
-	private:
-		void*    _p;
-		uint32_t _size;
-	};
 	
+#if 0	
+	template<typename T>
+	class vec
+	{//not used new operator
+	public:
+		vec() : _items(0) { init(0, 16); }
+		vec(int size) : _items(0) { init(0, size); }
+		vec(vec&& v) : _items(0) { init(v._items, v._size); v._items = 0; }
+		~vec() { clean(); }
+		T* operator*() { return _items; }
+		bool resize(int new_size)
+		{
+			assert(new_size >= 0);
+			T* p = _items = manager.malloc(sizeof(T)*new_size);
+			::memcpy_s(p, new_size * sizeof(T), _items, _size);
+			return init(p, new_size);
+		}
+	private:
+		bool init(T* p, int size) { clean(); _size = size; _items = p; if (p == 0)_items = manager.malloc(sizeof(T)*_size); return _items != 0; }
+		void clean() { if (_items != 0) { manager.free(_items); _items = 0; _size = 0; } }
+		T*    _items;
+		int _size;
+	};
+#endif
 	
 	
 	
@@ -797,8 +813,26 @@ on_ok_16:
 		//inline int fast_log2(register double x) { return ((reinterpret_cast<uint64_t&>(x) >> 52) & 2047) - 1023; };
 		//inline int float_log2(float x) { return ((*reinterpret_cast<uint32_t*>(&x) >> 23) & 255) - 127; };
 
-
-
+		//ПРИМЕЧАНИЯ
+		//Для хранения данных размера меньше 64 байт избыточность заголовка
+		//относительно чистых данных x = 2*(4 или 8)/64 и превысит 0.125 или 12%.
+		//Тогда положим N - число элементов, состоящие из 4 (или 8) байт:
+		//1) для хранения таких размеров выделим блок из N * sizeof(void*) байт;
+		//2) для разметки используем bitmap: 11 - начальный элемент, 10 - следующий,
+		//   что потребует N*2 бит/8/(4 или 8) элементов;
+		//Тогда доля заголовка и bitmap относительно чистых данных будет составлять
+		// x = (2 + N/4/(4 или 8)) / N.
+		//Откуда для N = 32, что соответствует 128 (или 256) байт
+		// x = 0.125 (или 0.094), т.е. не превысит 12%.
+		// Практически следует брать N > 32, например N = 256 (1024 или 2048 байт).
+		// В этом случае x = 0.07 или 0.04 < 7%.
+		// Вопрос: как по ptr определить заголовок?
+		//
+		//Можно разделить размеры выделяемой памяти на классы.
+		//Тогда для малых размеров использовать один pool, а
+		//для больших - другой pool.
+		//
+		//Для малых размеров поле size 32 бит избыточно.
 
 
 		//set default memory allocation functions
@@ -820,6 +854,14 @@ on_ok_16:
 		//        |                               |                              |                                   |                |                 | page_size
 		//        --------------------------------------------------------------------------------------------------------------------------------------|
 		//
+		//version 2:
+		//        | page header   | data header 0 | data block 0 | data header 1 | data block 1 | ... |data header n | unused block   |last data header |
+		//x86-32: | 32*4=128 bytes|   4 bytes     |              |   4 bytes     |              | ... |   4 bytes    | *next_, *prev_ |    4 bytes      |
+		//        |               |               |              |               |              | ... |              |                |                 |
+		//        |-------------------------------|------------------------------|-----------------------------------|----------------|-----------------|
+		//   ptr: |page_ptr                       |ptr0                          |ptr1                               |                |                 |page_ptr +
+		//        |                               |                              |                                   |                |                 | page_size
+		//        --------------------------------------------------------------------------------------------------------------------------------------|
 
 		//enum
 		//{
@@ -833,22 +875,25 @@ on_ok_16:
 
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
-#define data_header_offset   offsetof(struct data_header, next_unused)
+#define data_header_offset   (offsetof(struct data_header, next_unused)-offsetof(struct data_header, size))
 #define unused_header_bytes  (sizeof(struct data_header) - data_header_offset)
 #define page_header_bytes    sizeof(struct page_header)
-#define min_block_size       sizeof(struct data_header)
+#define data_header_size     sizeof(struct data_header)
 #define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
+#define busy_bit             1
+#define prev_busy_bit        2
 
 		struct page_header
 		{
 			struct data_header* unused_ptr[32]; //offsets to first unused block ordered by size
+			uint32_t memory_in_use;             //memory in use
 		};
 		struct data_header
 		{
-			size_t size; //block size, 0 bit is busy_bit: 1 - data block is busy, 0 - data block is unused block
-			struct data_header* prev; //ptr to previuos data block
-			struct data_header* next_unused; //ptr to next unused block
-			struct data_header* prev_unused; //ptr to previous unused block
+			struct data_header* prev;        //ptr to previuos data header (if prev_block_busy_bit == 0)
+			size_t size;                     //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
+			struct data_header* next_unused; //ptr to next unused block     (if busy_bit == 0)
+			struct data_header* prev_unused; //ptr to previous unused block (if busy_bit == 0)
 		};
 
 		class page_manager
@@ -871,46 +916,35 @@ on_ok_16:
 				if (_pool_ptr != 0)
 					allocator::free(_pool_ptr);
 			}
-			size_t get_used_size()
-			{//return total used memory of pool
-				data_header *p = cast_data_header(_pool_ptr, page_header_bytes);
-				size_t size, total = page_header_bytes + data_header_offset;
-				while (p && p->size > 1)
-				{
-					size = p->size & data_alignment_mask;
-					if (p->size & 1)total += size;
-					p = cast_data_header(p, size);
-				}
-				return total;
-			};
 		private:
 			bool create_with_pool(void* pool, size_t size)
 			{//create memory pool
 				_pool_ptr = 0;
 				_pool_size = 0;
 				if (pool == 0
-					|| size < (page_header_bytes + data_header_offset + min_block_size)
+					|| size < (page_header_bytes + data_header_offset + data_header_size)
 					|| (reinterpret_cast<size_t>(pool) & (data_alignment - 1)) != 0
-					|| (data_alignment & (data_alignment - 1)) != 0)return 0;
+					|| (data_alignment & (data_alignment - 1)) != 0) return 0;
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
 
 				::memset(_pool_ptr, 0, sizeof(page_header));
+				_pool_ptr->memory_in_use = page_header_bytes + data_header_offset;
 
 				//init first data_header
 				data_header* p = cast_data_header(_pool_ptr, page_header_bytes);
 				p->size = _pool_size - page_header_bytes - data_header_offset;
-				p->prev = 0;
+				p->size |= prev_busy_bit;
 				link_unused_block(p);
 				//init last data_header at end pool
 				data_header* p_last = cast_data_header(p, p->size);
-				p_last->size = 0 | 1;
+				p_last->size = 0 | busy_bit;
 				p_last->prev = p;
 				return true;
 			};
 			inline data_header** get_first_unused_block_by_size(register size_t size)
 			{
-				//index = ilog2(size)
+				//index = ilog2(size) - 3
 				register union { double d; int64_t i; }v = { (double)size };
 				v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0;
 				return &_pool_ptr->unused_ptr[v.i];
@@ -929,8 +963,8 @@ on_ok_16:
 			{
 				p->next_unused = 0;
 				p->prev_unused = 0;
-				p->size &= data_alignment_mask;
-				data_header* *pu = get_first_unused_block_by_size(p->size);
+				p->size &= ~busy_bit;//clear busy_bit
+				data_header* *pu = get_first_unused_block_by_size(p->size & data_alignment_mask);
 				if (*pu)
 				{
 					(*pu)->prev_unused = p;
@@ -958,8 +992,12 @@ on_ok_16:
 				return p;
 			};
 		public:
+			size_t get_used_size()
+			{//return total used memory of pool //data_header *p = cast_data_header(_pool_ptr, page_header_bytes);size_t size, total = page_header_bytes + data_header_offset;while (p && p->size > 1){size = p->size & data_alignment_mask;if (p->size & 1)total += size;p = cast_data_header(p, size);}return total;
+				return _pool_ptr->memory_in_use;
+			};
 			size_t msize(void* ptr)
-			{//return capacity of used data block
+			{//return capacity of used data block, 0 otherwise
 				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
@@ -968,10 +1006,11 @@ on_ok_16:
 			void* malloc(size_t size)
 			{
 				assert(_pool_ptr != 0);
-				if (size == 0)return 0;
+				if (size == 0) return 0;
 
 				//align size
 				size_t size_aligned = (size + data_header_offset + data_alignment - 1) & data_alignment_mask;
+				if (size_aligned < data_header_size)size_aligned = data_header_size;
 
 				//find unused block
 				data_header* p = find_unused_block(size_aligned);
@@ -983,7 +1022,7 @@ on_ok_16:
 				//unlink unused block
 				unlink_unused_block(p);
 
-				size_t unused = p->size;
+				size_t unused = p->size & (~prev_busy_bit);
 
 				//!!!here you can set the margin for the data block
 				if (unused - size_aligned < unused_header_bytes)
@@ -992,7 +1031,7 @@ on_ok_16:
 					//то весь unused block выделим для data block
 
 					//set new data block
-					p->size |= 1;
+					p->size |= busy_bit;
 				}
 				else
 				{
@@ -1001,22 +1040,24 @@ on_ok_16:
 					//простанство установим как новый unused block
 
 					//set new data block
-					p->size = size_aligned | 1;
+					p->size = size_aligned | busy_bit | (p->size & prev_busy_bit);
 
 					//set new unused block
 					data_header* p_new = cast_data_header(p, size_aligned);
 					p_new->size = unused - size_aligned;
-					p_new->prev = p;
+					p_new->size |= prev_busy_bit;
 					//link unused block
 					link_unused_block(p_new);
 
-					//update prev_size of next data block
+					//update prev of next data block
 					data_header* p_next = cast_data_header(p, unused);
 					p_next->prev = p_new;
 				}
+				//update pages memory_in_use
+				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
 				return reinterpret_cast<uint8_t*>(p) + data_header_offset;
 			};
-			void free(void* ptr)
+			void free(void* ptr)//TODO: проверка на ptr который уже освобождён
 			{
 				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
@@ -1031,23 +1072,25 @@ on_ok_16:
 
 				size_t unused = p->size & data_alignment_mask;
 				assert(unused > 0);
+				//update pages memory_in_use
+				_pool_ptr->memory_in_use -= unused;
 
 				data_header* p_next = cast_data_header(p, unused);
-				if ((p_next->size & 1) == 0)
+				if ((p_next->size & busy_bit) == 0)
 				{
 					unlink_unused_block(p_next);
-					unused += p_next->size;
+					unused += p_next->size & data_alignment_mask;
 				}
-				if (p->prev && (p->prev->size & 1) == 0)
+				if ((p->size & prev_busy_bit) == 0)
 				{
 					unlink_unused_block(p->prev);
-					unused += p->prev->size;
+					unused += p->prev->size & data_alignment_mask;
 					p = p->prev;
 				}
-				p->size = unused;
-				//update prev_size of next data_header
+				p->size = unused | (p->size & prev_busy_bit);
+				//update prev of next data_header
 				p_next = cast_data_header(p, unused);
-				p_next->prev = p;
+				p_next->size &= ~prev_busy_bit;
 				//link new unused block
 				link_unused_block(p);
 			};
