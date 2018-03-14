@@ -1039,7 +1039,7 @@ on_ok_16:
 					//link unused block
 					link_unused_block(p_new);
 
-					//update prev_size of next data block
+					//update prev of next data block
 					data_header* p_next = cast_data_header(p, unused);
 					p_next->prev = p_new;
 				}
