@@ -875,10 +875,9 @@ on_ok_16:
 
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
-#define data_header_offset   offsetof(struct data_header, next_unused)
-#define data_header_offset1  offsetof(struct data_header, size)
 #define data_header_size     (offsetof(struct data_header, next_unused) - offsetof(struct data_header, size))
 #define data_header_bytes    sizeof(struct data_header)
+#define data_header_offset   offsetof(struct data_header, next_unused)
 #define unused_header_bytes  (data_header_bytes - data_header_size)
 #define page_header_bytes    sizeof(struct page_header)
 #define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
@@ -933,7 +932,7 @@ on_ok_16:
 				_pool_ptr->memory_in_use = page_header_bytes + data_header_size;
 
 				//init first data_header
-				data_header* p = cast_data_header(_pool_ptr, page_header_bytes - data_header_offset1);
+				data_header* p = cast_data_header(_pool_ptr, page_header_bytes - data_header_offset + data_header_size);
 				p->size = _pool_size - page_header_bytes - data_header_size;
 				p->size |= prev_busy_bit;
 				link_unused_block(p);
@@ -998,7 +997,7 @@ on_ok_16:
 				return _pool_ptr->memory_in_use;
 			};
 			size_t msize(void* ptr)
-			{//return capacity of used data block, 0 otherwise
+			{//return capacity (greater than or equal to the size) of used data block, 0 otherwise
 				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
