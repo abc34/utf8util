@@ -875,10 +875,11 @@ on_ok_16:
 
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
-#define data_header_tosize   offsetof(struct data_header, size)
-#define data_header_offset   (offsetof(struct data_header, next_unused) - data_header_tosize)
+#define data_header_offset   offsetof(struct data_header, next_unused)
+#define data_header_offset1  offsetof(struct data_header, size)
+#define data_header_size     (offsetof(struct data_header, next_unused) - offsetof(struct data_header, size))
 #define data_header_bytes    sizeof(struct data_header)
-#define unused_header_bytes  (data_header_bytes - data_header_offset)
+#define unused_header_bytes  (data_header_bytes - data_header_size)
 #define page_header_bytes    sizeof(struct page_header)
 #define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
 #define busy_bit             1
@@ -923,17 +924,17 @@ on_ok_16:
 				_pool_ptr = 0;
 				_pool_size = 0;
 				if (pool == 0
-					|| size < (page_header_bytes + data_header_offset + data_header_bytes)
+					|| size < (page_header_bytes + data_header_size + data_header_bytes)
 					|| ((reinterpret_cast<size_t>(pool) | data_alignment) & (data_alignment - 1)) != 0) return 0;
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
 
 				::memset(_pool_ptr, 0, sizeof(page_header));
-				_pool_ptr->memory_in_use = page_header_bytes + data_header_offset;
+				_pool_ptr->memory_in_use = page_header_bytes + data_header_size;
 
 				//init first data_header
-				data_header* p = cast_data_header(_pool_ptr, page_header_bytes - data_header_tosize);
-				p->size = _pool_size - page_header_bytes - data_header_offset;
+				data_header* p = cast_data_header(_pool_ptr, page_header_bytes - data_header_offset1);
+				p->size = _pool_size - page_header_bytes - data_header_size;
 				p->size |= prev_busy_bit;
 				link_unused_block(p);
 				//init last data_header at end pool
@@ -993,15 +994,15 @@ on_ok_16:
 			};
 		public:
 			size_t get_used_size()
-			{//return total used memory of pool //data_header *p = cast_data_header(_pool_ptr, page_header_bytes);size_t size, total = page_header_bytes + data_header_offset;while (p && p->size > 1){size = p->size & data_alignment_mask;if (p->size & 1)total += size;p = cast_data_header(p, size);}return total;
+			{
 				return _pool_ptr->memory_in_use;
 			};
 			size_t msize(void* ptr)
 			{//return capacity of used data block, 0 otherwise
 				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
-				data_header *p = cast_data_header(ptr, -int(data_header_offset + data_header_tosize));
-				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_offset : 0;
+				data_header *p = cast_data_header(ptr, -int(data_header_offset));
+				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
 			void* malloc(size_t size)
 			{
@@ -1009,7 +1010,7 @@ on_ok_16:
 				if (size == 0) return 0;
 
 				//align size
-				size_t size_aligned = (size + data_header_offset + data_alignment - 1) & data_alignment_mask;
+				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
 				if (size_aligned < data_header_bytes)size_aligned = data_header_bytes;
 
 				//find unused block
@@ -1055,7 +1056,7 @@ on_ok_16:
 				}
 				//update pages memory_in_use
 				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
-				return reinterpret_cast<uint8_t*>(p) + data_header_tosize + data_header_offset;
+				return reinterpret_cast<uint8_t*>(p) + data_header_offset;
 			};
 			void free(void* ptr)//TODO: проверка на ptr который уже освобождён
 			{
@@ -1065,7 +1066,7 @@ on_ok_16:
 					allocator::free(ptr); return;
 				}
 
-				data_header *p = cast_data_header(ptr, -int(data_header_offset + data_header_tosize));
+				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 
 				//!!! при такой стратегии слева и справа от data block
 				//!!! может быть только один unused block
