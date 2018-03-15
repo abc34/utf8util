@@ -875,11 +875,12 @@ on_ok_16:
 
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
-#define data_header_offset   (offsetof(struct data_header, next_unused)-offsetof(struct data_header, size))
-#define unused_header_bytes  (sizeof(struct data_header) - data_header_offset)
+#define data_header_tosize   offsetof(struct data_header, size)
+#define data_header_offset   (offsetof(struct data_header, next_unused) - data_header_tosize)
+#define data_header_bytes    sizeof(struct data_header)
+#define unused_header_bytes  (data_header_bytes - data_header_offset)
 #define page_header_bytes    sizeof(struct page_header)
-#define data_header_size     sizeof(struct data_header)
-#define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
+#define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
 #define busy_bit             1
 #define prev_busy_bit        2
 
@@ -922,9 +923,8 @@ on_ok_16:
 				_pool_ptr = 0;
 				_pool_size = 0;
 				if (pool == 0
-					|| size < (page_header_bytes + data_header_offset + data_header_size)
-					|| (reinterpret_cast<size_t>(pool) & (data_alignment - 1)) != 0
-					|| (data_alignment & (data_alignment - 1)) != 0) return 0;
+					|| size < (page_header_bytes + data_header_offset + data_header_bytes)
+					|| ((reinterpret_cast<size_t>(pool) | data_alignment) & (data_alignment - 1)) != 0) return 0;
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
 
@@ -932,12 +932,12 @@ on_ok_16:
 				_pool_ptr->memory_in_use = page_header_bytes + data_header_offset;
 
 				//init first data_header
-				data_header* p = cast_data_header(_pool_ptr, page_header_bytes);
+				data_header* p = cast_data_header(_pool_ptr, page_header_bytes - data_header_tosize);
 				p->size = _pool_size - page_header_bytes - data_header_offset;
 				p->size |= prev_busy_bit;
 				link_unused_block(p);
 				//init last data_header at end pool
-				data_header* p_last = cast_data_header(p, p->size);
+				data_header* p_last = cast_data_header(p, p->size & data_alignment_mask);
 				p_last->size = 0 | busy_bit;
 				p_last->prev = p;
 				return true;
@@ -1000,7 +1000,7 @@ on_ok_16:
 			{//return capacity of used data block, 0 otherwise
 				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
-				data_header *p = cast_data_header(ptr, -int(data_header_offset));
+				data_header *p = cast_data_header(ptr, -int(data_header_offset + data_header_tosize));
 				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_offset : 0;
 			};
 			void* malloc(size_t size)
@@ -1010,7 +1010,7 @@ on_ok_16:
 
 				//align size
 				size_t size_aligned = (size + data_header_offset + data_alignment - 1) & data_alignment_mask;
-				if (size_aligned < data_header_size)size_aligned = data_header_size;
+				if (size_aligned < data_header_bytes)size_aligned = data_header_bytes;
 
 				//find unused block
 				data_header* p = find_unused_block(size_aligned);
@@ -1022,7 +1022,7 @@ on_ok_16:
 				//unlink unused block
 				unlink_unused_block(p);
 
-				size_t unused = p->size & (~prev_busy_bit);
+				size_t unused = p->size & data_alignment_mask;
 
 				//!!!here you can set the margin for the data block
 				if (unused - size_aligned < unused_header_bytes)
@@ -1055,7 +1055,7 @@ on_ok_16:
 				}
 				//update pages memory_in_use
 				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
-				return reinterpret_cast<uint8_t*>(p) + data_header_offset;
+				return reinterpret_cast<uint8_t*>(p) + data_header_tosize + data_header_offset;
 			};
 			void free(void* ptr)//TODO: проверка на ptr который уже освобождён
 			{
@@ -1065,7 +1065,7 @@ on_ok_16:
 					allocator::free(ptr); return;
 				}
 
-				data_header *p = cast_data_header(ptr, -int(data_header_offset));
+				data_header *p = cast_data_header(ptr, -int(data_header_offset + data_header_tosize));
 
 				//!!! при такой стратегии слева и справа от data block
 				//!!! может быть только один unused block
@@ -1091,6 +1091,7 @@ on_ok_16:
 				//update prev of next data_header
 				p_next = cast_data_header(p, unused);
 				p_next->size &= ~prev_busy_bit;
+				p_next->prev = p;
 				//link new unused block
 				link_unused_block(p);
 			};
