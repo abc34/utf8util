@@ -814,25 +814,29 @@ on_ok_16:
 		//inline int float_log2(float x) { return ((*reinterpret_cast<uint32_t*>(&x) >> 23) & 255) - 127; };
 
 		//ПРИМЕЧАНИЯ
-		//Для хранения данных размера меньше 64 байт избыточность заголовка
-		//относительно чистых данных x = 2*(4 или 8)/64 и превысит 0.125 или 12%.
-		//Тогда положим N - число элементов, состоящие из 4 (или 8) байт:
-		//1) для хранения таких размеров выделим блок из N * sizeof(void*) байт;
-		//2) для разметки используем bitmap: 11 - начальный элемент, 10 - следующий,
-		//   что потребует N*2 бит/8/(4 или 8) элементов;
-		//Тогда доля заголовка и bitmap относительно чистых данных будет составлять
-		// x = (2 + N/4/(4 или 8)) / N.
-		//Откуда для N = 32, что соответствует 128 (или 256) байт
-		// x = 0.125 (или 0.094), т.е. не превысит 12%.
-		// Практически следует брать N > 32, например N = 256 (1024 или 2048 байт).
-		// В этом случае x = 0.07 или 0.04 < 7%.
-		// Вопрос: как по ptr определить заголовок?
+		//Для x86-32:
+		//1. Для выделенных блоков заголовок состоит из одного поля size размером 4 байт.
+		//   Для освобождённых блоков заголовок занимает 16 байт.
+		//2. Адрес выделяемого блока выравнивается до 4 байт.
+		//   Размеры выделяемых блоков выравниваются до 4 байт.
+		//2. Минимальный размер блока равен 16 байт (для размеров от 1 до 12 байт, min block capacity = 12 байт).
 		//
-		//Можно разделить размеры выделяемой памяти на классы.
-		//Тогда для малых размеров использовать один pool, а
-		//для больших - другой pool.
-		//
-		//Для малых размеров поле size 32 бит избыточно.
+		//Data structure:
+		//-----------------------------------------------------------------------------------------------------------------------
+		//        | page header   |  size   | data block 0 |  size   | data block 1 | ... |  size   | data block n   |last size |
+		//x86-32: | 32*4=128 bytes| 4 bytes |              | 4 bytes |              | ... | 4 bytes |                | 4 bytes  |
+		//        |               |         |              |         |              | ... |         |                |          |
+		//        |-------------------------|------------------------|------------------------------|---------------------------|
+		//   ptr: |page_ptr                 |ptr 0                   |ptr 1                         |ptr n                      |page_ptr +
+		//        |                         |                        |                              |                           | pool_size
+		//-----------------------------------------------------------------------------------------------------------------------
+
+		//Возможные улучшения:
+		//Для малых размеров 32 бит для поля size избыточно.
+		//  Тогда для хранения размера можно использовать столько байт, сколько требуется.
+		//  В этом случае для определения 1,2,3 или 4 байт можно использовать 2 и 3 биты size.
+		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
+		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
 
 
 		//set default memory allocation functions
@@ -844,54 +848,26 @@ on_ok_16:
 			static inline size_t msize(void* ptr) { return ::_msize(ptr); };
 		};
 
-		//All data blocks inside pages have data_alignment = sizeof(void*) = 4 bytes (x86-32) or 8 bytes (x86-64).
-		//Data structure:
-		//        | page header   | data header 0 | data block 0 | data header 1 | data block 1 | ... |data header n | unused block   |last data header |
-		//x86-32: | 32*4=128 bytes| 2*4=8 bytes   |              |   8 bytes     |              | ... |   8 bytes    | *next_, *prev_ |    8 bytes      |
-		//x86-64: | 32*8=256 bytes| 2*8=16 bytes  |              |  16 bytes     |              | ... |  16 bytes    |                |   16 bytes      |
-		//        |-------------------------------|------------------------------|-----------------------------------|----------------|-----------------|
-		//   ptr: |page_ptr                       |ptr0                          |ptr1                               |                |                 |page_ptr +
-		//        |                               |                              |                                   |                |                 | page_size
-		//        --------------------------------------------------------------------------------------------------------------------------------------|
-		//
-		//version 2:
-		//        | page header   | data header 0 | data block 0 | data header 1 | data block 1 | ... |data header n | unused block   |last data header |
-		//x86-32: | 32*4=128 bytes|   4 bytes     |              |   4 bytes     |              | ... |   4 bytes    | *next_, *prev_ |    4 bytes      |
-		//        |               |               |              |               |              | ... |              |                |                 |
-		//        |-------------------------------|------------------------------|-----------------------------------|----------------|-----------------|
-		//   ptr: |page_ptr                       |ptr0                          |ptr1                               |                |                 |page_ptr +
-		//        |                               |                              |                                   |                |                 | page_size
-		//        --------------------------------------------------------------------------------------------------------------------------------------|
-
-		//enum
-		//{
-		//	data_alignment = sizeof(void*),
-		//	data_alignment_mask = ~(data_alignment - 1),
-		//	data_header_offset = offsetof(struct data_header, next_unused),
-		//	page_header_bytes = sizeof(struct page_header),
-		//	unused_header_bytes = sizeof(struct data_header) - offsetof(struct data_header, next_unused),
-		//	min_block_size = sizeof(struct data_header)
-		//};
-
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
 #define data_header_size     (offsetof(struct data_header, next_unused) - offsetof(struct data_header, size))
 #define data_header_bytes    sizeof(struct data_header)
 #define data_header_offset   offsetof(struct data_header, next_unused)
-#define unused_header_bytes  (data_header_bytes - data_header_size)
 #define page_header_bytes    sizeof(struct page_header)
 #define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
 #define busy_bit             1
 #define prev_busy_bit        2
+#define default_pool_size    0x40000UL
+
 
 		struct page_header
 		{
 			struct data_header* unused_ptr[32]; //offsets to first unused block ordered by size
-			uint32_t memory_in_use;             //memory in use
+			uint32_t memory_in_use;             //memory in use, bytes
 		};
 		struct data_header
 		{
-			struct data_header* prev;        //ptr to previuos data header (if prev_block_busy_bit == 0)
+			struct data_header* prev;        //ptr to previuos data header  (if prev_block_busy_bit == 0)
 			size_t size;                     //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
 			struct data_header* next_unused; //ptr to next unused block     (if busy_bit == 0)
 			struct data_header* prev_unused; //ptr to previous unused block (if busy_bit == 0)
@@ -900,7 +876,6 @@ on_ok_16:
 		class page_manager
 		{
 		public:
-			const size_t default_pool_size = 1UL << 18; //256 kbyte default pool size
 			page_manager()
 			{
 				void* pool = allocator::malloc(default_pool_size);
@@ -932,7 +907,7 @@ on_ok_16:
 				_pool_ptr->memory_in_use = page_header_bytes + data_header_size;
 
 				//init first data_header
-				data_header* p = cast_data_header(_pool_ptr, page_header_bytes - data_header_offset + data_header_size);
+				data_header* p = cast_data_header(_pool_ptr, page_header_bytes + data_header_size - data_header_offset);
 				p->size = _pool_size - page_header_bytes - data_header_size;
 				p->size |= prev_busy_bit;
 				link_unused_block(p);
@@ -944,9 +919,9 @@ on_ok_16:
 			};
 			inline data_header** get_first_unused_block_by_size(register size_t size)
 			{
-				//index = ilog2(size) - 3
+				//index = ilog2(size) - 4
 				register union { double d; int64_t i; }v = { (double)size };
-				v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0;
+				v.i = (v.i >> 52) - 1027; if (v.i < 0) v.i = 0;
 				return &_pool_ptr->unused_ptr[v.i];
 			};
 			void unlink_unused_block(data_header* p)
@@ -986,7 +961,7 @@ on_ok_16:
 						if (pu >= end) return 0;
 						p = *pu++;
 					}
-					if (p->size >= size) break;
+					if ((p->size & data_alignment_mask) >= size) break;
 					p = p->next_unused;
 				}
 				return p;
@@ -1010,7 +985,8 @@ on_ok_16:
 
 				//align size
 				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
-				if (size_aligned < data_header_bytes)size_aligned = data_header_bytes;
+				//if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
+				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 
 				//find unused block
 				data_header* p = find_unused_block(size_aligned);
@@ -1025,13 +1001,16 @@ on_ok_16:
 				size_t unused = p->size & data_alignment_mask;
 
 				//!!!here you can set the margin for the data block
-				if (unused - size_aligned < unused_header_bytes)
+				if (unused - size_aligned < data_header_bytes)
 				{
 					//если в unused - size_aligned нельзя вместить unused_header,
 					//то весь unused block выделим для data block
 
 					//set new data block
 					p->size |= busy_bit;
+					//update prev_busy_bit of next data block
+					data_header* p_next = cast_data_header(p, unused);
+					p_next->size |= prev_busy_bit;
 				}
 				else
 				{
