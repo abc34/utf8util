@@ -990,7 +990,7 @@ on_ok_16:
 
 				//align size
 				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
-				//if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
+
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 
 				//find unused block
@@ -1008,7 +1008,7 @@ on_ok_16:
 				//!!!here you can set the margin for the data block
 				if (unused - size_aligned < data_header_bytes)
 				{
-					//если в unused - size_aligned нельзя вместить unused_header,
+					//если в unused - size_aligned нельзя вместить data_header,
 					//то весь unused block выделим для data block
 
 					//set new data block
@@ -1019,7 +1019,7 @@ on_ok_16:
 				}
 				else
 				{
-					//если в unused можно вместить unused_header,
+					//если в unused можно вместить data_header,
 					//то выделим в нем data block, а оставшееся
 					//простанство установим как новый unused block
 
