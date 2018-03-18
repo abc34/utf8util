@@ -819,22 +819,27 @@ on_ok_16:
 		//   Для освобождённых блоков заголовок занимает 16 байт.
 		//2. Адрес выделяемого блока выравнивается до 4 байт.
 		//   Размеры выделяемых блоков выравниваются до 4 байт.
-		//2. Минимальный размер блока равен 16 байт (для размеров от 1 до 12 байт, min block capacity = 12 байт).
+		//3. Минимальный размер блока равен 16 байт (для размеров от 1 до 12 байт, min capacity = 12 байт).
 		//
 		//Data structure:
-		//structure of data block after malloc space 1
-		//------------------------------------------------------------------------------------------------------
-		//|  size   |                    used space 1                         |  size   |   used space 2 ...
-		//|---------|---------------------------------------------------------|---------|-----------------------
-		//| header1 |ptr1                                                     | header2 |ptr2
-		//------------------------------------------------------------------------------------------------------
+		//1) structure of data block 1 after malloc space 1
+		//-------------------------------------------------------------------------------------------------------
+		//|  size   |                    used space 1                          |  size   |   used space 2 ...
+		//|---------|----------------------------------------------------------|---------|-----------------------
+		//| header1 |ptr1                                                      | header2 |ptr2
+		//|------------------------------------------------------------------------------|-----------------------
+		//|                      data block 1                                            |   data block 2
+		//|------------------------------------------------------------------------------|-----------------------
 		//
-		//structure of data block after free space 1
-		//------------------------------------------------------------------------------------------------------
+		//
+		//2) structure of data block 1 after free space 1
+		//-------------------------------------------------------------------------------------------------------
 		//|  size   | next_unused  | prev_unused |   unused space 1   |  prev  |  size   |   used space 2 ...
 		//|--------------------------------------|--------------------|------------------|-----------------------
 		//|             header1                  |                    |     header2      |ptr2
-		//------------------------------------------------------------------------------------------------------
+		//|------------------------------------------------------------------------------|-----------------------
+		//|                      data block 1                                            |   data block 2
+		//|------------------------------------------------------------------------------|-----------------------
 
 		//Возможные улучшения:
 		//Для малых размеров 32 бит для поля size избыточно.
@@ -867,7 +872,7 @@ on_ok_16:
 
 		struct page_header
 		{
-			struct data_header* unused_ptr[32]; //offsets to first unused block ordered by size
+			struct data_header* unused_ptr[32]; //offsets to first unused block ordered by power 2
 			uint32_t memory_in_use;             //memory in use, bytes
 		};
 		struct data_header
@@ -990,7 +995,6 @@ on_ok_16:
 
 				//align size
 				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
-
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 
 				//find unused block
@@ -1004,12 +1008,10 @@ on_ok_16:
 				unlink_unused_block(p);
 
 				size_t unused = p->size & data_alignment_mask;
-
-				//!!!here you can set the margin for the data block
 				if (unused - size_aligned < data_header_bytes)
 				{
-					//если в unused - size_aligned нельзя вместить data_header,
-					//то весь unused block выделим для data block
+					//если в (unused - size_aligned) нельзя вместить data_header,
+					//то занимаем весь unused block
 
 					//set new data block
 					p->size |= busy_bit;
@@ -1019,7 +1021,7 @@ on_ok_16:
 				}
 				else
 				{
-					//если в unused можно вместить data_header,
+					//если в (unused - size_aligned) можно вместить data_header,
 					//то выделим в нем data block, а оставшееся
 					//простанство установим как новый unused block
 
@@ -1043,19 +1045,18 @@ on_ok_16:
 			};
 			void free(void* ptr)//TODO: проверка на ptr который уже освобождён
 			{
-				assert(_pool_ptr != 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
 				{
 					allocator::free(ptr); return;
 				}
 
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
+				assert(_pool_ptr != 0 && (p->size & busy_bit) == 1);
 
 				//!!! при такой стратегии слева и справа от data block
 				//!!! может быть только один unused block
 
 				size_t unused = p->size & data_alignment_mask;
-				assert(unused > 0);
 				//update pages memory_in_use
 				_pool_ptr->memory_in_use -= unused;
 
