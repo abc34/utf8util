@@ -820,6 +820,7 @@ on_ok_16:
 		//2. Адрес выделяемого блока выравнивается до 4 байт.
 		//   Размеры выделяемых блоков выравниваются до 4 байт.
 		//3. Минимальный размер блока равен 16 байт (для размеров от 1 до 12 байт, min capacity = 12 байт).
+		//4. Максимальный размер блока не должен превышать 2^35 байт, что с запасом превышает 32 бит.
 		//
 		//Data structure:
 		//1) structure of data block 1 after malloc space 1
@@ -931,12 +932,12 @@ on_ok_16:
 			{
 				//index = ilog2(size) - 4
 				register union { double d; int64_t i; }v = { (double)size };
-				v.i = (v.i >> 52) - 1027; if (v.i < 0) v.i = 0;
+				v.i = (v.i >> 52) - 1027; if (v.i < 0) v.i = 0; if (v.i > 31) v.i = 31;
 				return &_pool_ptr->unused_ptr[v.i];
 			};
 			void unlink_unused_block(data_header* p)
 			{
-				data_header* *pu = get_first_unused_block_by_size(p->size);
+				data_header **pu = get_first_unused_block_by_size(p->size);
 				if (p->prev_unused)
 					p->prev_unused->next_unused = p->next_unused;
 				if (p->next_unused)
@@ -949,7 +950,7 @@ on_ok_16:
 				p->next_unused = 0;
 				p->prev_unused = 0;
 				p->size &= ~busy_bit;//clear busy_bit
-				data_header* *pu = get_first_unused_block_by_size(p->size & data_alignment_mask);
+				data_header **pu = get_first_unused_block_by_size(p->size & data_alignment_mask);
 				if (*pu)
 				{
 					(*pu)->prev_unused = p;
@@ -993,7 +994,7 @@ on_ok_16:
 				assert(_pool_ptr != 0);
 				if (size == 0) return 0;
 
-				//align size
+				//alignment size
 				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 
@@ -1043,15 +1044,17 @@ on_ok_16:
 				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
 				return reinterpret_cast<uint8_t*>(p) + data_header_offset;
 			};
-			void free(void* ptr)//TODO: проверка на ptr который уже освобождён
+			void free(void* ptr)
 			{
+				assert(_pool_ptr != 0);
+
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
 				{
 					allocator::free(ptr); return;
 				}
 
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
-				assert(_pool_ptr != 0 && (p->size & busy_bit) == 1);
+				assert((p->size & busy_bit) == 1);
 
 				//!!! при такой стратегии слева и справа от data block
 				//!!! может быть только один unused block
