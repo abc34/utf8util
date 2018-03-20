@@ -965,7 +965,7 @@ on_ok_16:
 				p->next_unused = 0;
 				p->prev_unused = 0;
 				p->size &= ~busy_bit;//clear busy_bit
-				data_header **pu = get_first_unused_block_by_size(p->size & data_alignment_mask);
+				data_header **pu = get_first_unused_block_by_size(p->size);
 				if (*pu)
 				{
 					(*pu)->prev_unused = p;
@@ -973,7 +973,7 @@ on_ok_16:
 				}
 				*pu = p;
 			};
-			data_header* find_unused_block(size_t size)
+			data_header* find_unused_block(size_t size) //!!! size must be aligned
 			{
 				data_header
 					*p = 0,
