@@ -968,7 +968,7 @@ on_ok_16:
 					*pu = p->next_unused;
 				if(*pu == 0)
 				{
-					_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(1UL << (31 - ((pu - _pool_ptr->sli_table) & 31)));
+					_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31));
 				}
 			};
 			void link_unused_block(data_header* p)
@@ -983,7 +983,7 @@ on_ok_16:
 					p->next_unused = *pu;
 				}
 				*pu = p;
-				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 1UL << (31 - ((pu - _pool_ptr->sli_table) & 31));
+				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31);
 			};
 			data_header* find_unused_block(size_t size)//!!!size must be aligned
 			{
