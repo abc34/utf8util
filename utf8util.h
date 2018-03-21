@@ -889,7 +889,7 @@ on_ok_16:
 		struct page_header
 		{
 			struct data_header* sli_table[sli_table_n]; //table of ptr to first unused block
-			uint32_t fli_table[fli_table_n];            //bitmap of used linked list ptr
+			uint32_t fli_table[fli_table_n];            //bitmap of used data in sli_table
 			uint32_t memory_in_use;                     //memory in use, bytes
 		};
 
@@ -901,21 +901,32 @@ on_ok_16:
 				void* pool = allocator::malloc(default_pool_size);
 				create_with_pool(pool, default_pool_size);
 			}
-			page_manager(size_t size)
+			page_manager(size_t bytes)
 			{
-				if (size == 0) size = default_pool_size;
-				void* pool = allocator::malloc(size);
-				create_with_pool(pool, size);
+				if (bytes == 0) bytes = default_pool_size;
+				void* pool = allocator::malloc(bytes);
+				create_with_pool(pool, bytes);
 			}
 			~page_manager()
 			{
-				if (_pool_ptr != 0)
-					allocator::free(_pool_ptr);
+				destroy();
+			}
+			bool create(void* pool, size_t bytes)
+			{
+				if (_pool_ptr != 0) destroy();
+				return create_with_pool(pool, bytes);
+			}
+			bool destroy()
+			{
+				if (_pool_ptr != 0) allocator::free(_pool_ptr);
+				_pool_ptr = 0; _pool_size = 0;
+				return true;
 			}
 			bool reinit()
 			{
 				if (_pool_ptr != 0)
 					return create_with_pool(_pool_ptr, _pool_size);
+				return false;
 			}
 		private:
 			bool create_with_pool(void* pool, size_t size)
@@ -924,7 +935,7 @@ on_ok_16:
 				_pool_size = 0;
 				if (pool == 0
 					|| size < (page_header_bytes + data_header_size + data_header_bytes)
-					|| ((reinterpret_cast<size_t>(pool) | data_alignment) & (data_alignment - 1)) != 0) return 0;
+					|| ((reinterpret_cast<size_t>(pool) | data_alignment) & (data_alignment - 1)) != 0) return false;
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
 
@@ -989,33 +1000,26 @@ on_ok_16:
 			{
 				data_header
 					*p = 0,
-					**pu = get_first_unused_block_by_size(size),
-					**end = &_pool_ptr->sli_table[sli_table_n];
+					**pu = get_first_unused_block_by_size(size);
+				uint32_t
+					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->sli_table) & 31),
+					*pbit = &_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5],
+					*pbit_end = &_pool_ptr->fli_table[fli_table_n];
 				size &= data_alignment_mask;
 				while (1)
 				{
 					if (p == 0)
 					{
-#if 0
-						//~ 4 times slow
-						while (pu < end && *pu == 0)pu++;
-						if (pu >= end) return 0;
-						p = *pu++;
-#else
-						uint32_t nbit = pu - _pool_ptr->sli_table,
-							*pbit = &_pool_ptr->fli_table[nbit >> 5], *pbit_end = &_pool_ptr->fli_table[fli_table_n];
-						nbit = (*pbit) & (0xFFFFFFFFUL >> (nbit & 31));
-						if (nbit == 0)
+						m &= (*pbit);
+						if (m == 0)
 						{
 							pbit++; while (pbit < pbit_end && *pbit == 0) pbit++;
-							if (pbit >= pbit_end) return 0;
-							nbit = *pbit;
+							if (pbit >= pbit_end) return 0; m = *pbit;
 						}
-						register union { double d; int64_t i; }v = { (double)nbit };
-						nbit = 1023 + 31 - (v.i >> 52) + ((pbit - _pool_ptr->fli_table) << 5);
-						pu = _pool_ptr->sli_table + nbit;
-						p = *pu++;
-#endif
+						register union { double d; int64_t i; }v = { (double)m };
+						m = 31 + 1023 - (v.i >> 52);
+						pu = _pool_ptr->sli_table + (m + ((pbit - _pool_ptr->fli_table) << 5));
+						p = *pu; m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;
 					}
 					if (p->size >= size) break;
 					p = p->next_unused;
@@ -1026,6 +1030,10 @@ on_ok_16:
 			size_t get_used_size()
 			{
 				return _pool_ptr->memory_in_use;
+			};
+			size_t get_free_size()
+			{
+				return _pool_size - _pool_ptr->memory_in_use;
 			};
 			size_t msize(void* ptr)
 			{//return capacity (greater than or equal to the size) of used data block, 0 otherwise
