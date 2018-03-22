@@ -810,6 +810,11 @@ on_ok_16:
 		//};
 		//fast_log2 ~ 9 sec
 		inline int fast_log2(register double x) { return (reinterpret_cast<uint64_t&>(x) >> 52) - 1023; };
+		inline int fast_log2i(register double x)
+		{
+			register union { double d; int32_t i[2]; }v = { x };
+			return (v.i[1] >> 20) - 1023;
+		};
 		//inline int fast_log2(register double x) { return ((reinterpret_cast<uint64_t&>(x) >> 52) & 2047) - 1023; };
 		//inline int float_log2(float x) { return ((*reinterpret_cast<uint32_t*>(&x) >> 23) & 255) - 127; };
 
@@ -848,6 +853,9 @@ on_ok_16:
 		//  В этом случае для определения 1,2,3 или 4 байт можно использовать 2 и 3 биты size.
 		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
 		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
+		//Возможно можно не вычислять sli, если вместо size хранить его sli.
+		//Можно проверить log2i вместо int64_t использовать int32_t[2].
+		//Проверять в get_first_unused_block_by_size() if(size<2^(sli_bits+1)) и сразу возвращать sli.
 
 
 		//set default memory allocation functions
@@ -874,6 +882,7 @@ on_ok_16:
 #define busy_bit             1
 #define prev_busy_bit        2
 #define sli_bits             5
+#define sli_first_max        (1UL<<(sli_bits + 1))
 #define sli_table_n          (((32 - data_alignment_bits - sli_bits + 1) << sli_bits) - (data_header_bytes / data_alignment))
 #define fli_table_n          ((sli_table_n + 31)/32)
 #define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
@@ -939,6 +948,7 @@ on_ok_16:
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
 
+				//init page header
 				::memset(_pool_ptr, 0, page_header_bytes);
 				_pool_ptr->memory_in_use = page_header_bytes + data_header_size;
 
@@ -956,17 +966,15 @@ on_ok_16:
 			inline data_header** get_first_unused_block_by_size(size_t size)
 			{
 				assert(size >= data_header_bytes);
-				size >>= data_alignment_bits;
-				register union { double d; int64_t i; }v = { (double)size };
-				v.i = (v.i >> 52) - 1023 - sli_bits;
-				v.i = v.i <= 0 ? size : (v.i << sli_bits) + (size >> v.i);
-				v.i -= data_header_bytes / data_alignment;
-				return &_pool_ptr->sli_table[v.i];
-
-				//index = ilog2(size) - 4
-				//register union { double d; int64_t i; }v = { (double)size };
-				//v.i = (v.i >> 52) - 1027; if (v.i < 0) v.i = 0; if (v.i > 31) v.i = 31;
-				//return &_pool_ptr->unused_ptr[v.i];
+				uint32_t sli = size >> data_alignment_bits;
+				if (sli >= sli_first_max)
+				{
+					register union { double d; uint32_t i[2]; }v = { (double)sli };
+					v.i[1] = (v.i[1] >> 20) - 1023 - sli_bits;
+					sli = (v.i[1] << sli_bits) + (sli >> v.i[1]);
+				}
+				sli -= data_header_bytes / data_alignment;
+				return &_pool_ptr->sli_table[sli];
 			};
 			void unlink_unused_block(data_header* p)
 			{
@@ -1014,12 +1022,16 @@ on_ok_16:
 						if (m == 0)
 						{
 							pbit++; while (pbit < pbit_end && *pbit == 0) pbit++;
-							if (pbit >= pbit_end) return 0; m = *pbit;
+							if (pbit >= pbit_end) return 0;
+							m = *pbit;
 						}
-						register union { double d; int64_t i; }v = { (double)m };
-						m = 31 + 1023 - (v.i >> 52);
+						register union { double d; int32_t i[2]; }v = { (double)m };
+						m = 31 + 1023 - (v.i[1] >> 20);
 						pu = _pool_ptr->sli_table + (m + ((pbit - _pool_ptr->fli_table) << 5));
-						p = *pu; m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;
+						m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;//shr workaround for 5 bit mask
+						p = *pu;
+
+						assert(pu < &_pool_ptr->sli_table[sli_table_n]);
 					}
 					if (p->size >= size) break;
 					p = p->next_unused;
