@@ -907,14 +907,11 @@ on_ok_16:
 		public:
 			page_manager()
 			{
-				void* pool = allocator::malloc(default_pool_size);
-				create_with_pool(pool, default_pool_size);
+				_pool_ptr = 0;_pool_size = 0;
 			}
-			page_manager(size_t bytes)
+			page_manager(void* pool, size_t bytes)
 			{
-				if (bytes == 0) bytes = default_pool_size;
-				void* pool = allocator::malloc(bytes);
-				create_with_pool(pool, bytes);
+				_pool_ptr = 0;_pool_size = 0; create(pool, bytes);
 			}
 			~page_manager()
 			{
@@ -923,6 +920,8 @@ on_ok_16:
 			bool create(void* pool, size_t bytes)
 			{
 				if (_pool_ptr != 0) destroy();
+				if (bytes == 0) bytes = default_pool_size;
+				if (pool == 0) pool = allocator::malloc(bytes);
 				return create_with_pool(pool, bytes);
 			}
 			bool destroy()
@@ -1004,7 +1003,7 @@ on_ok_16:
 				*pu = p;
 				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31);
 			};
-			data_header* find_unused_block(size_t size)//!!!size must be aligned
+			data_header* find_unused_block(size_t size)
 			{
 				data_header
 					*p = 0,
@@ -1013,7 +1012,7 @@ on_ok_16:
 					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->sli_table) & 31),
 					*pbit = &_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5],
 					*pbit_end = &_pool_ptr->fli_table[fli_table_n];
-				size &= data_alignment_mask;
+				//size &= data_alignment_mask;
 				while (1)
 				{
 					if (p == 0)
@@ -1041,22 +1040,24 @@ on_ok_16:
 		public:
 			size_t get_used_size()
 			{
+				assert(_pool_ptr > 0);
 				return _pool_ptr->memory_in_use;
 			};
 			size_t get_free_size()
 			{
+				assert(_pool_ptr > 0);
 				return _pool_size - _pool_ptr->memory_in_use;
 			};
 			size_t msize(void* ptr)
 			{//return capacity (greater than or equal to the size) of used data block, 0 otherwise
-				assert(_pool_ptr != 0);
+				assert(_pool_ptr > 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
 			void* malloc(size_t size)
 			{
-				assert(_pool_ptr != 0 && size > 0);
+				assert(_pool_ptr > 0 && size > 0);
 				if (size == 0) return 0;
 
 				//alignment of size
@@ -1067,6 +1068,7 @@ on_ok_16:
 				data_header* p = find_unused_block(size_aligned);
 				if (p == 0)
 				{
+					assert(p > 0); return 0; //!!! for testing purpose
 					return allocator::malloc(size);
 				}
 
@@ -1111,7 +1113,7 @@ on_ok_16:
 			};
 			void free(void* ptr)
 			{
-				assert(_pool_ptr != 0);
+				assert(_pool_ptr > 0);
 
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
 				{
@@ -1122,11 +1124,11 @@ on_ok_16:
 				
 				assert((p->size & busy_bit) == 1);
 
-				//!!! при такой стратегии слева и справа от data block
-				//!!! может быть только один unused block
+				//далее предполагается, что слева и справа от data block
+				//может быть только один unused block
 
 				size_t unused = p->size & data_alignment_mask;
-				//update pages memory_in_use
+				//update memory_in_use
 				_pool_ptr->memory_in_use -= unused;
 
 				data_header* p_next = cast_data_header(p, unused);
