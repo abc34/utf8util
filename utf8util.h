@@ -869,7 +869,7 @@ on_ok_16:
 
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
-#ifdef _WIN64
+#if data_alignment = 8
 #define data_alignment_bits  3
 #else
 #define data_alignment_bits  2
