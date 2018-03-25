@@ -905,14 +905,16 @@ on_ok_16:
 #define sli_table_n          (((32 - data_alignment_bits - sli_bits + 1) << sli_bits) - (data_header_bytes / data_alignment))
 #define fli_table_n          ((sli_table_n + 31)/32)
 #define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
-
+//cast and offset by 4 byte words
+#define cast_data_header_32bit(p, offs)  reinterpret_cast<data_header*>(reinterpret_cast<uint32_t*>(p) + (offs))
+#define offs_data_header_32bit(p, p_to)  int32_t(reinterpret_cast<uint32_t*>(p_to) - reinterpret_cast<uint32_t*>(p))
 
 		struct data_header
 		{
-			struct data_header* prev;        //ptr to previuos data header  (if prev_block_busy_bit == 0)
-			size_t size;                     //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
-			struct data_header* next_unused; //ptr to next unused block     (if busy_bit == 0)
-			struct data_header* prev_unused; //ptr to previous unused block (if busy_bit == 0)
+			 int32_t prev;         //offset to previuos data header  (if prev_block_busy_bit == 0)
+			uint32_t size;         //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
+			 int32_t next_unused;  //offset to next unused block     (if busy_bit == 0)
+			 int32_t prev_unused;  //offset to previous unused block (if busy_bit == 0)
 		};
 		struct page_header
 		{
@@ -928,7 +930,7 @@ on_ok_16:
 			{
 				_pool_ptr = 0;_pool_size = 0;
 			}
-			page_manager(void* pool, size_t bytes)
+			page_manager(void* pool, uint32_t bytes)
 			{
 				_pool_ptr = 0;_pool_size = 0; create(pool, bytes);
 			}
@@ -936,7 +938,7 @@ on_ok_16:
 			{
 				destroy();
 			}
-			bool create(void* pool, size_t bytes)
+			bool create(void* pool, uint32_t bytes)
 			{
 				if (_pool_ptr != 0) destroy();
 				if (bytes == 0) bytes = default_pool_size;
@@ -956,7 +958,7 @@ on_ok_16:
 				return false;
 			}
 		private:
-			bool create_with_pool(void* pool, size_t size)
+			bool create_with_pool(void* pool, uint32_t size)
 			{//create memory pool
 				_pool_ptr = 0;
 				_pool_size = 0;
@@ -978,13 +980,13 @@ on_ok_16:
 				//init last data_header at end pool
 				data_header* p_last = cast_data_header(p, p->size & data_alignment_mask);
 				p_last->size = 0 | busy_bit;
-				p_last->prev = p;
+				p_last->prev = offs_data_header_32bit(p_last, p);
 				return true;
 			};
-			inline data_header** get_first_unused_block_by_size(size_t size)
+			inline data_header** get_first_unused_block_by_size(uint32_t size)
 			{
 				assert(size >= data_header_bytes);
-				uint32_t sli = ((uint32_t)size) >> data_alignment_bits;
+				uint32_t sli = size >> data_alignment_bits;
 				if (sli >= sli_first_max)
 				{
 					register union { double d; uint32_t i[2]; }v = { (double)sli };
@@ -998,11 +1000,20 @@ on_ok_16:
 			{
 				data_header **pu = get_first_unused_block_by_size(p->size);
 				if (p->prev_unused)
-					p->prev_unused->next_unused = p->next_unused;
+				{
+					if (p->next_unused) cast_data_header_32bit(p, p->prev_unused)->next_unused += p->next_unused;
+					else cast_data_header_32bit(p, p->prev_unused)->next_unused = 0;
+				}
 				if (p->next_unused)
-					p->next_unused->prev_unused = p->prev_unused;
+				{
+					if (p->prev_unused) cast_data_header_32bit(p, p->next_unused)->prev_unused += p->prev_unused;
+					else cast_data_header_32bit(p, p->next_unused)->prev_unused = 0;
+				}
 				if (p->prev_unused == 0)
-					*pu = p->next_unused;
+				{
+					if (p->next_unused) *pu = cast_data_header_32bit(p, p->next_unused);
+					else *pu = 0;
+				}
 				if(*pu == 0)
 				{
 					_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31));
@@ -1016,13 +1027,13 @@ on_ok_16:
 				data_header **pu = get_first_unused_block_by_size(p->size);
 				if (*pu)
 				{
-					(*pu)->prev_unused = p;
-					p->next_unused = *pu;
+					p->next_unused = offs_data_header_32bit(p, *pu);
+					(*pu)->prev_unused = -p->next_unused;
 				}
 				*pu = p;
 				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31);
 			};
-			data_header* find_unused_block(size_t size)
+			data_header* find_unused_block(uint32_t size)
 			{
 				data_header
 					*p = 0,
@@ -1052,7 +1063,7 @@ on_ok_16:
 						assert(pu < &_pool_ptr->sli_table[sli_table_n]);
 					}
 					if (p->size >= size) break;
-					p = p->next_unused;
+					p = p->next_unused == 0 ? 0 : cast_data_header_32bit(p, p->next_unused);
 				}
 				return p;
 			};
@@ -1074,13 +1085,13 @@ on_ok_16:
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
-			void* malloc(size_t size)
+			void* malloc(uint32_t size)
 			{
 				assert(_pool_ptr > 0 && size > 0);
 				if (size == 0) return 0;
 
 				//alignment of size
-				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
+				uint32_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 
 				//find unused block
@@ -1094,7 +1105,7 @@ on_ok_16:
 				//unlink unused block
 				unlink_unused_block(p);
 
-				size_t unused = p->size & data_alignment_mask;
+				uint32_t unused = p->size & data_alignment_mask;
 				if (unused - size_aligned < data_header_bytes)
 				{
 					//если в (unused - size_aligned) нельзя вместить data_header,
@@ -1124,11 +1135,11 @@ on_ok_16:
 
 					//update prev of next data block
 					data_header* p_next = cast_data_header(p, unused);
-					p_next->prev = p_new;
+					p_next->prev = offs_data_header_32bit(p_next, p_new);
 				}
 				//update pages memory_in_use
 				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
-				return reinterpret_cast<uint8_t*>(p) + data_header_offset;
+				return cast_data_header(p, data_header_offset);
 			};
 			void free(void* ptr)
 			{
@@ -1146,11 +1157,11 @@ on_ok_16:
 				//далее предполагается, что слева и справа от data block
 				//может быть только один unused block
 
-				size_t unused = p->size & data_alignment_mask;
+				uint32_t unused = p->size & data_alignment_mask;
 				//update memory_in_use
-				_pool_ptr->memory_in_use -= (uint32_t)unused;
+				_pool_ptr->memory_in_use -= unused;
 
-				data_header* p_next = cast_data_header(p, unused);
+				data_header *p_next = cast_data_header(p, unused), *p_prev;
 				if ((p_next->size & busy_bit) == 0)
 				{
 					unlink_unused_block(p_next);
@@ -1158,22 +1169,23 @@ on_ok_16:
 				}
 				if ((p->size & prev_busy_bit) == 0)
 				{
-					unlink_unused_block(p->prev);
-					unused += p->prev->size & data_alignment_mask;
-					p = p->prev;
+					p_prev = cast_data_header_32bit(p, p->prev);
+					unlink_unused_block(p_prev);
+					unused += p_prev->size & data_alignment_mask;
+					p = p_prev;
 				}
 				p->size = unused | (p->size & prev_busy_bit);
 				//update prev of next data_header
 				p_next = cast_data_header(p, unused);
 				p_next->size &= ~prev_busy_bit;
-				p_next->prev = p;
+				p_next->prev = offs_data_header_32bit(p_next, p);
 				//link new unused block
 				link_unused_block(p);
 			};
 
 		private:
 			page_header* _pool_ptr;
-			size_t       _pool_size;
+			uint32_t     _pool_size;
 		};
 	}//end namespace memory
 }//end namespace LZ - lazy
