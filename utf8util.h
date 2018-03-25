@@ -221,7 +221,7 @@ namespace LZ
 				if (option == OPT_SKIP_INVALID) { ncount32 -= nerrors; }
 				else { ncount8 += nerrors * 3; }
 				vi->length8 = ncount8;
-				vi->length16 = src_length - (src_end - src);
+				vi->length16 = src_length - uint32_t(src_end - src);
 				vi->length32 = ncount32;
 				vi->nerrors = nerrors;
 				vi->src_next = src;
@@ -809,30 +809,67 @@ on_ok_16:
 		//	return x ? (int)r : -1;
 		//};
 		//fast_log2 ~ 9 sec
-		inline int fast_log2(register double x) { return (reinterpret_cast<uint64_t&>(x) >> 52) - 1023; };
+		inline int fast_log2(double x) { return (reinterpret_cast<uint64_t&>(x) >> 52) - 1023; };
+		inline int fast_log2i(double x){ union { double d; int32_t i[2]; }v = { x }; return (v.i[1] >> 20) - 1023;};
 		//inline int fast_log2(register double x) { return ((reinterpret_cast<uint64_t&>(x) >> 52) & 2047) - 1023; };
 		//inline int float_log2(float x) { return ((*reinterpret_cast<uint32_t*>(&x) >> 23) & 255) - 127; };
 
 		//ПРИМЕЧАНИЯ
-		//Для хранения данных размера меньше 64 байт избыточность заголовка
-		//относительно чистых данных x = 2*(4 или 8)/64 и превысит 0.125 или 12%.
-		//Тогда положим N - число элементов, состоящие из 4 (или 8) байт:
-		//1) для хранения таких размеров выделим блок из N * sizeof(void*) байт;
-		//2) для разметки используем bitmap: 11 - начальный элемент, 10 - следующий,
-		//   что потребует N*2 бит/8/(4 или 8) элементов;
-		//Тогда доля заголовка и bitmap относительно чистых данных будет составлять
-		// x = (2 + N/4/(4 или 8)) / N.
-		//Откуда для N = 32, что соответствует 128 (или 256) байт
-		// x = 0.125 (или 0.094), т.е. не превысит 12%.
-		// Практически следует брать N > 32, например N = 256 (1024 или 2048 байт).
-		// В этом случае x = 0.07 или 0.04 < 7%.
-		// Вопрос: как по ptr определить заголовок?
+		//TLSF-like hand-made
+		//VERSION 2.0
+		//Для 32 битной системы:
+		//1. Для выделенных блоков заголовок занимает           4 байт (только поле size).
+		//   Для освобождённых блоков заголовок занимает       16 байт.
+		//2. Адрес выделяемого блока выравнивается           до 4 байт.
+		//3. Размеры выделяемых блоков выравниваются         до 4 байт.
+		//4. Минимальный размер блока равен                     16 байт (min capacity = 12 байт).
+		//5. Размер sli_table для хранения списков unused blocks
+		//   (при sli_bits = 5)           равен 828 = 828*4 = 3312 байт.
+		//6. Максимальный размер блока не может превышать величины
+		//   (при sli_bits = 5)                 (pool_size - 3424) байт.
+		//7. Свободные блоки с размерами < sli_first_max*data_alignment,
+		//   (при sli_bits = 5) sli_first_max*data_alignment = 256 байт,
+		//   попадают в sli_table в соответствии с диапазонами:
+		//       |16-19|20-23|...|254-255|       <= с шагом 4 байта,
+		//   далее шаг удваивается с пропорциональным удвоением диапазона:
+		//       |256-263|264-271|...|504-511|   <= с шагом 8 байт,
+		//       |512-527|528-543|...|1008-1023| <= с шагом 16 байт,
+		//       |1024-1055|...                  <= с шагом 32 байт,
+		//       и т.д.
 		//
-		//Можно разделить размеры выделяемой памяти на классы.
-		//Тогда для малых размеров использовать один pool, а
-		//для больших - другой pool.
 		//
-		//Для малых размеров поле size 32 бит избыточно.
+		//Для 64 битной системы:
+		//1. Для выделенных блоков заголовок занимает           8 байт (только поле size).
+		//   Для освобождённых блоков заголовок занимает       32 байт.
+		//
+		//
+		//Data structure:
+		//1) structure of data block 1 after malloc space 1
+		//|--------------------------------------------------------------------|---------------------------------
+		//|  size   |                    used space 1                          |  size   |   used space 2 ...
+		//|---------|----------------------------------------------------------|---------|-----------------------
+		//| header1 |ptr1                                                      | header2 |ptr2
+		//|--------------------------------------------------------------------|---------------------------------
+		//|                      data block 1                                  |     data block 2
+		//|--------------------------------------------------------------------|---------------------------------
+		//
+		//2) structure of data block 1 after free space 1
+		//|-----------------------------------------------------------|------------------------------------------
+		//|  size   | next_unused  | prev_unused |   unused space 1   |  prev  |  size   |   used space 2 ...
+		//|--------------------------------------|--------------------|------------------|-----------------------
+		//|             header1                  |                    |     header2      |ptr2
+		//|-----------------------------------------------------------|------------------------------------------
+		//|                      data block 1                         |              data block 2
+		//|-----------------------------------------------------------|------------------------------------------
+
+		//Возможные улучшения:
+		//Для малых размеров 32 бит для поля size избыточно.
+		//  Тогда для хранения размера можно использовать столько байт, сколько требуется.
+		//  В этом случае для определения 1,2,3 или 4 байт можно использовать 2 и 3 биты size.
+		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
+		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
+		//Возможно можно не вычислять sli, если вместо size хранить его sli.
+		//Сделать для 64 бит.
 
 
 		//set default memory allocation functions
@@ -844,67 +881,74 @@ on_ok_16:
 			static inline size_t msize(void* ptr) { return ::_msize(ptr); };
 		};
 
-		//All data blocks inside pages have data_alignment = sizeof(void*) = 4 bytes (x86-32) or 8 bytes (x86-64).
-		//Data structure:
-		//        | page header   | data header 0 | data block 0 | data header 1 | data block 1 | ... |data header n | unused block   |last data header |
-		//x86-32: | 32*4=128 bytes| 2*4=8 bytes   |              |   8 bytes     |              | ... |   8 bytes    | *next_, *prev_ |    8 bytes      |
-		//x86-64: | 32*8=256 bytes| 2*8=16 bytes  |              |  16 bytes     |              | ... |  16 bytes    |                |   16 bytes      |
-		//        |-------------------------------|------------------------------|-----------------------------------|----------------|-----------------|
-		//   ptr: |page_ptr                       |ptr0                          |ptr1                               |                |                 |page_ptr +
-		//        |                               |                              |                                   |                |                 | page_size
-		//        --------------------------------------------------------------------------------------------------------------------------------------|
-		//
-
-		//enum
-		//{
-		//	data_alignment = sizeof(void*),
-		//	data_alignment_mask = ~(data_alignment - 1),
-		//	data_header_offset = offsetof(struct data_header, next_unused),
-		//	page_header_bytes = sizeof(struct page_header),
-		//	unused_header_bytes = sizeof(struct data_header) - offsetof(struct data_header, next_unused),
-		//	min_block_size = sizeof(struct data_header)
-		//};
-
 #define data_alignment       sizeof(void*)
 #define data_alignment_mask  ~(data_alignment - 1)
+#if defined (_WIN64)
+#define data_alignment_bits  3
+#else
+#define data_alignment_bits  2
+#endif
+#define data_header_size     (offsetof(struct data_header, next_unused) - offsetof(struct data_header, size))
+#define data_header_bytes    sizeof(struct data_header)
 #define data_header_offset   offsetof(struct data_header, next_unused)
-#define unused_header_bytes  (sizeof(struct data_header) - data_header_offset)
 #define page_header_bytes    sizeof(struct page_header)
-#define data_header_size     sizeof(struct data_header)
-#define cast_data_header(p,offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
+#define default_pool_size    0x40000UL
+#define busy_bit             1
+#define prev_busy_bit        2
+#define sli_bits             5
+#define sli_first_max        (1UL<<(sli_bits + 1))
+#define sli_table_n          (((32 - data_alignment_bits - sli_bits + 1) << sli_bits) - (data_header_bytes / data_alignment))
+#define fli_table_n          ((sli_table_n + 31)/32)
+#define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
 
-		struct page_header
-		{
-			struct data_header* unused_ptr[32]; //offsets to first unused block ordered by size
-			uint32_t memory_in_use; //memory in use
-		};
+
 		struct data_header
 		{
-			size_t size; //block size, 0 bit is busy_bit: 1 - data block is busy, 0 - data block is unused
-			struct data_header* prev; //ptr to previuos data block
-			struct data_header* next_unused; //ptr to next unused block
-			struct data_header* prev_unused; //ptr to previous unused block
+			struct data_header* prev;        //ptr to previuos data header  (if prev_block_busy_bit == 0)
+			size_t size;                     //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
+			struct data_header* next_unused; //ptr to next unused block     (if busy_bit == 0)
+			struct data_header* prev_unused; //ptr to previous unused block (if busy_bit == 0)
+		};
+		struct page_header
+		{
+			struct data_header* sli_table[sli_table_n]; //table of ptr to first unused block
+			uint32_t fli_table[fli_table_n];            //bitmap of used data in sli_table
+			uint32_t memory_in_use;                     //memory in use, bytes
 		};
 
 		class page_manager
 		{
 		public:
-			const size_t default_pool_size = 1UL << 18; //256 kbyte default pool size
 			page_manager()
 			{
-				void* pool = allocator::malloc(default_pool_size);
-				create_with_pool(pool, default_pool_size);
+				_pool_ptr = 0;_pool_size = 0;
 			}
-			page_manager(size_t size)
+			page_manager(void* pool, size_t bytes)
 			{
-				if (size == 0) size = default_pool_size;
-				void* pool = allocator::malloc(size);
-				create_with_pool(pool, size);
+				_pool_ptr = 0;_pool_size = 0; create(pool, bytes);
 			}
 			~page_manager()
 			{
+				destroy();
+			}
+			bool create(void* pool, size_t bytes)
+			{
+				if (_pool_ptr != 0) destroy();
+				if (bytes == 0) bytes = default_pool_size;
+				if (pool == 0) pool = allocator::malloc(bytes);
+				return create_with_pool(pool, bytes);
+			}
+			bool destroy()
+			{
+				if (_pool_ptr != 0) allocator::free(_pool_ptr);
+				_pool_ptr = 0; _pool_size = 0;
+				return true;
+			}
+			bool reinit()
+			{
 				if (_pool_ptr != 0)
-					allocator::free(_pool_ptr);
+					return create_with_pool(_pool_ptr, _pool_size);
+				return false;
 			}
 		private:
 			bool create_with_pool(void* pool, size_t size)
@@ -912,69 +956,95 @@ on_ok_16:
 				_pool_ptr = 0;
 				_pool_size = 0;
 				if (pool == 0
-					|| size < (page_header_bytes + data_header_offset + data_header_size)
-					|| (reinterpret_cast<size_t>(pool) & (data_alignment - 1)) != 0
-					|| (data_alignment & (data_alignment - 1)) != 0)return 0;
+					|| size < (page_header_bytes + data_header_size + data_header_bytes)
+					|| ((reinterpret_cast<size_t>(pool) | data_alignment) & (data_alignment - 1)) != 0) return false;
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
 
-				::memset(_pool_ptr, 0, sizeof(page_header));
-				_pool_ptr->memory_in_use = page_header_bytes + data_header_offset;
+				//init page header
+				::memset(_pool_ptr, 0, page_header_bytes);
+				_pool_ptr->memory_in_use = page_header_bytes + data_header_size;
 
 				//init first data_header
-				data_header* p = cast_data_header(_pool_ptr, page_header_bytes);
-				p->size = _pool_size - page_header_bytes - data_header_offset;
-				p->prev = 0;
+				data_header* p = cast_data_header(_pool_ptr, page_header_bytes + data_header_size - data_header_offset);
+				p->size = _pool_size - page_header_bytes - data_header_size;
+				p->size |= prev_busy_bit;
 				link_unused_block(p);
 				//init last data_header at end pool
-				data_header* p_last = cast_data_header(p, p->size);
-				p_last->size = 0 | 1;
+				data_header* p_last = cast_data_header(p, p->size & data_alignment_mask);
+				p_last->size = 0 | busy_bit;
 				p_last->prev = p;
 				return true;
 			};
-			inline data_header** get_first_unused_block_by_size(register size_t size)
+			inline data_header** get_first_unused_block_by_size(size_t size)
 			{
-				//index = ilog2(size) - 3
-				register union { double d; int64_t i; }v = { (double)size };
-				v.i = (v.i >> 52) - 1026; if (v.i < 0) v.i = 0;
-				return &_pool_ptr->unused_ptr[v.i];
+				assert(size >= data_header_bytes);
+				uint32_t sli = ((uint32_t)size) >> data_alignment_bits;
+				if (sli >= sli_first_max)
+				{
+					register union { double d; uint32_t i[2]; }v = { (double)sli };
+					v.i[1] = (v.i[1] >> 20) - 1023 - sli_bits;
+					sli = (v.i[1] << sli_bits) + (sli >> v.i[1]);
+				}
+				sli -= data_header_bytes / data_alignment;
+				return &_pool_ptr->sli_table[sli];
 			};
 			void unlink_unused_block(data_header* p)
 			{
-				data_header* *pu = get_first_unused_block_by_size(p->size);
+				data_header **pu = get_first_unused_block_by_size(p->size);
 				if (p->prev_unused)
 					p->prev_unused->next_unused = p->next_unused;
 				if (p->next_unused)
 					p->next_unused->prev_unused = p->prev_unused;
 				if (p->prev_unused == 0)
 					*pu = p->next_unused;
+				if(*pu == 0)
+				{
+					_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31));
+				}
 			};
 			void link_unused_block(data_header* p)
 			{
 				p->next_unused = 0;
 				p->prev_unused = 0;
-				p->size &= data_alignment_mask;
-				data_header* *pu = get_first_unused_block_by_size(p->size);
+				p->size &= ~busy_bit;//clear busy_bit
+				data_header **pu = get_first_unused_block_by_size(p->size);
 				if (*pu)
 				{
 					(*pu)->prev_unused = p;
 					p->next_unused = *pu;
 				}
 				*pu = p;
+				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31);
 			};
 			data_header* find_unused_block(size_t size)
 			{
 				data_header
 					*p = 0,
-					**pu = get_first_unused_block_by_size(size),
-					**end = &_pool_ptr->unused_ptr[32];
+					**pu = get_first_unused_block_by_size(size);
+				uint32_t
+					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->sli_table) & 31),
+					*pbit = &_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5],
+					*pbit_end = &_pool_ptr->fli_table[fli_table_n];
+				//size &= data_alignment_mask;
 				while (1)
 				{
 					if (p == 0)
 					{
-						while (pu < end && *pu == 0)pu++;
-						if (pu >= end) return 0;
-						p = *pu++;
+						m &= (*pbit);
+						if (m == 0)
+						{
+							pbit++; while (pbit < pbit_end && *pbit == 0) pbit++;
+							if (pbit >= pbit_end) return 0;
+							m = *pbit;
+						}
+						register union { double d; int32_t i[2]; }v = { (double)m };
+						m = 31 + 1023 - (v.i[1] >> 20);
+						pu = _pool_ptr->sli_table + (m + ((pbit - _pool_ptr->fli_table) << 5));
+						m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;//shr workaround for 5 bit mask
+						p = *pu;
+
+						assert(pu < &_pool_ptr->sli_table[sli_table_n]);
 					}
 					if (p->size >= size) break;
 					p = p->next_unused;
@@ -983,59 +1053,67 @@ on_ok_16:
 			};
 		public:
 			size_t get_used_size()
-			{//return total used memory of pool //data_header *p = cast_data_header(_pool_ptr, page_header_bytes);size_t size, total = page_header_bytes + data_header_offset;while (p && p->size > 1){size = p->size & data_alignment_mask;if (p->size & 1)total += size;p = cast_data_header(p, size);}return total;
+			{
+				assert(_pool_ptr > 0);
 				return _pool_ptr->memory_in_use;
 			};
+			size_t get_free_size()
+			{
+				assert(_pool_ptr > 0);
+				return _pool_size - _pool_ptr->memory_in_use;
+			};
 			size_t msize(void* ptr)
-			{//return capacity of used data block, 0 otherwise
-				assert(_pool_ptr != 0);
+			{//return capacity (greater than or equal to the size) of used data block, 0 otherwise
+				assert(_pool_ptr > 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
-				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_offset : 0;
+				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
 			void* malloc(size_t size)
 			{
-				assert(_pool_ptr != 0);
-				if (size == 0)return 0;
+				assert(_pool_ptr > 0 && size > 0);
+				if (size == 0) return 0;
 
-				//align size
-				size_t size_aligned = (size + data_header_offset + data_alignment - 1) & data_alignment_mask;
-				if (size_aligned < data_header_size)size_aligned = data_header_size;
+				//alignment of size
+				size_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
+				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 
 				//find unused block
 				data_header* p = find_unused_block(size_aligned);
 				if (p == 0)
 				{
+					assert(p > 0); return 0; //!!! for testing purpose
 					return allocator::malloc(size);
 				}
 
 				//unlink unused block
 				unlink_unused_block(p);
 
-				size_t unused = p->size;
-
-				//!!!here you can set the margin for the data block
-				if (unused - size_aligned < unused_header_bytes)
+				size_t unused = p->size & data_alignment_mask;
+				if (unused - size_aligned < data_header_bytes)
 				{
-					//если в unused - size_aligned нельзя вместить unused_header,
-					//то весь unused block выделим для data block
+					//если в (unused - size_aligned) нельзя вместить data_header,
+					//то занимаем весь unused block
 
 					//set new data block
-					p->size |= 1;
+					p->size |= busy_bit;
+					//update prev_busy_bit of next data block
+					data_header* p_next = cast_data_header(p, unused);
+					p_next->size |= prev_busy_bit;
 				}
 				else
 				{
-					//если в unused можно вместить unused_header,
+					//если в (unused - size_aligned) можно вместить data_header,
 					//то выделим в нем data block, а оставшееся
 					//простанство установим как новый unused block
 
 					//set new data block
-					p->size = size_aligned | 1;
+					p->size = size_aligned | busy_bit | (p->size & prev_busy_bit);
 
 					//set new unused block
 					data_header* p_new = cast_data_header(p, size_aligned);
 					p_new->size = unused - size_aligned;
-					p_new->prev = p;
+					p_new->size |= prev_busy_bit;
 					//link unused block
 					link_unused_block(p_new);
 
@@ -1049,37 +1127,40 @@ on_ok_16:
 			};
 			void free(void* ptr)
 			{
-				assert(_pool_ptr != 0);
+				assert(_pool_ptr > 0);
+
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
 				{
 					allocator::free(ptr); return;
 				}
 
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
+				
+				assert((p->size & busy_bit) == 1);
 
-				//!!! при такой стратегии слева и справа от data block
-				//!!! может быть только один unused block
+				//далее предполагается, что слева и справа от data block
+				//может быть только один unused block
 
 				size_t unused = p->size & data_alignment_mask;
-				assert(unused > 0);
-				//update pages memory_in_use
-				_pool_ptr->memory_in_use -= unused;
+				//update memory_in_use
+				_pool_ptr->memory_in_use -= (uint32_t)unused;
 
 				data_header* p_next = cast_data_header(p, unused);
-				if ((p_next->size & 1) == 0)
+				if ((p_next->size & busy_bit) == 0)
 				{
 					unlink_unused_block(p_next);
-					unused += p_next->size;
+					unused += p_next->size & data_alignment_mask;
 				}
-				if (p->prev && (p->prev->size & 1) == 0)
+				if ((p->size & prev_busy_bit) == 0)
 				{
 					unlink_unused_block(p->prev);
-					unused += p->prev->size;
+					unused += p->prev->size & data_alignment_mask;
 					p = p->prev;
 				}
-				p->size = unused;
+				p->size = unused | (p->size & prev_busy_bit);
 				//update prev of next data_header
 				p_next = cast_data_header(p, unused);
+				p_next->size &= ~prev_busy_bit;
 				p_next->prev = p;
 				//link new unused block
 				link_unused_block(p);
