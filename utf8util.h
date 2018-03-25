@@ -221,7 +221,7 @@ namespace LZ
 				if (option == OPT_SKIP_INVALID) { ncount32 -= nerrors; }
 				else { ncount8 += nerrors * 3; }
 				vi->length8 = ncount8;
-				vi->length16 = src_length - (src_end - src);
+				vi->length16 = src_length - uint32_t(src_end - src);
 				vi->length32 = ncount32;
 				vi->nerrors = nerrors;
 				vi->src_next = src;
@@ -979,7 +979,7 @@ on_ok_16:
 			inline data_header** get_first_unused_block_by_size(size_t size)
 			{
 				assert(size >= data_header_bytes);
-				uint32_t sli = size >> data_alignment_bits;
+				uint32_t sli = ((uint32_t)size) >> data_alignment_bits;
 				if (sli >= sli_first_max)
 				{
 					register union { double d; uint32_t i[2]; }v = { (double)sli };
@@ -1143,7 +1143,7 @@ on_ok_16:
 
 				size_t unused = p->size & data_alignment_mask;
 				//update memory_in_use
-				_pool_ptr->memory_in_use -= unused;
+				_pool_ptr->memory_in_use -= (uint32_t)unused;
 
 				data_header* p_next = cast_data_header(p, unused);
 				if ((p_next->size & busy_bit) == 0)
