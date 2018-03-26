@@ -886,13 +886,9 @@ on_ok_16:
 			static inline size_t msize(void* ptr) { return ::_msize(ptr); };
 		};
 
-#define data_alignment       sizeof(void*)
-#define data_alignment_mask  ~(data_alignment - 1)
-#if defined (_WIN64)
-#define data_alignment_bits  3
-#else
+#define data_alignment       4
 #define data_alignment_bits  2
-#endif
+#define data_alignment_mask  (~3UL)
 #define data_header_size     (offsetof(struct data_header, next_unused) - offsetof(struct data_header, size))
 #define data_header_bytes    sizeof(struct data_header)
 #define data_header_offset   offsetof(struct data_header, next_unused)
@@ -908,6 +904,7 @@ on_ok_16:
 //cast and offset by 4 byte words
 #define cast_data_header_32bit(p, offs)  reinterpret_cast<data_header*>(reinterpret_cast<uint32_t*>(p) + (offs))
 #define offs_data_header_32bit(p, p_to)  int32_t(reinterpret_cast<uint32_t*>(p_to) - reinterpret_cast<uint32_t*>(p))
+
 
 		struct data_header
 		{
@@ -1187,5 +1184,28 @@ on_ok_16:
 			page_header* _pool_ptr;
 			uint32_t     _pool_size;
 		};
+
+#if 0
+		//firefox javascript scratchpad
+		//for calculation sli_table_n
+		var SLI = 5, align = 4, min_size = 16;
+		function cl(s, k) { return Math.trunc(s*Math.pow(2, -k))*Math.pow(2, k); }
+		var f = function(size)
+		{
+			if (size < min_size) size = min_size;
+			var m = 0, i = 0, sli = Math.trunc(size / align), sli_first_max = 1 << (SLI + 1);
+			if (sli >= sli_first_max)
+			{
+				i = Math.floor(Math.log2(sli)) - SLI;
+				//sli = (i<<SLI) + (sli>>i);
+				sli = Math.pow(2, SLI)*i + Math.trunc(Math.pow(2, -i)*sli);
+			}
+			return[cl(size / align, i)*align, (cl(size / align, i) + Math.pow(2, i))*align - 1, sli - min_size / align];
+		}
+		console.log(f(Math.pow(2, 32)));//2^32 =  4 GB, sli_table_n = 828
+		console.log(f(Math.pow(2, 33)));//2^33 =  8 GB, sli_table_n = 860
+		console.log(f(Math.pow(2, 34)));//2^34 = 16 GB, sli_table_n = 892
+#endif
+
 	}//end namespace memory
 }//end namespace LZ - lazy
