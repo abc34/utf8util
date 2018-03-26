@@ -821,8 +821,7 @@ on_ok_16:
 		//VERSION 2.1
 		// - on 64-bit systems, reduce all data_header fields to 4 bytes
 		//
-		//VERSION 2.0
-		//Для 32 битной системы:
+		//Для 32 и 64 битных систем:
 		//1. Для выделенных блоков заголовок занимает            4 байт (только поле size).
 		//   Для освобождённых блоков заголовок занимает        16 байт.
 		//2. Адрес выделяемого блока выравнивается            до 4 байт.
@@ -842,10 +841,6 @@ on_ok_16:
 		//       |1024-1055|...                  <= с шагом 32 байт,
 		//       и т.д.
 		//
-		//
-		//Для 64 битной системы:
-		//1. Для выделенных блоков заголовок занимает           8 байт (только поле size).
-		//   Для освобождённых блоков заголовок занимает       32 байт.
 		//
 		//
 		//Data structure:
@@ -874,7 +869,8 @@ on_ok_16:
 		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
 		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
 		//Возможно можно не вычислять sli, если вместо size хранить его sli.
-		//Сделать для 64 бит.
+		//Можно все указатели сделать uint32_t*, вместо uint8_t*.
+		//Сделать aligned malloc.
 
 
 		//set default memory allocation functions
@@ -915,9 +911,9 @@ on_ok_16:
 		};
 		struct page_header
 		{
-			struct data_header* sli_table[sli_table_n]; //table of ptr to first unused block
-			uint32_t fli_table[fli_table_n];            //bitmap of used data in sli_table
-			uint32_t memory_in_use;                     //memory in use, bytes
+			uint32_t sli_table[sli_table_n]; //table of offset to first unused block
+			uint32_t fli_table[fli_table_n]; //bitmap of used data in sli_table
+			uint32_t memory_in_use;          //memory in use, bytes
 		};
 
 		class page_manager
@@ -980,7 +976,7 @@ on_ok_16:
 				p_last->prev = offs_data_header_32bit(p_last, p);
 				return true;
 			};
-			inline data_header** get_first_unused_block_by_size(uint32_t size)
+			inline uint32_t* get_first_unused_block_by_size(uint32_t size)
 			{
 				assert(size >= data_header_bytes);
 				uint32_t sli = size >> data_alignment_bits;
@@ -995,7 +991,7 @@ on_ok_16:
 			};
 			void unlink_unused_block(data_header* p)
 			{
-				data_header **pu = get_first_unused_block_by_size(p->size);
+				uint32_t *pu = get_first_unused_block_by_size(p->size);
 				if (p->prev_unused)
 				{
 					if (p->next_unused) cast_data_header_32bit(p, p->prev_unused)->next_unused += p->next_unused;
@@ -1008,7 +1004,7 @@ on_ok_16:
 				}
 				if (p->prev_unused == 0)
 				{
-					if (p->next_unused) *pu = cast_data_header_32bit(p, p->next_unused);
+					if (p->next_unused) *pu = offs_data_header_32bit(_pool_ptr, cast_data_header_32bit(p, p->next_unused));
 					else *pu = 0;
 				}
 				if(*pu == 0)
@@ -1021,25 +1017,23 @@ on_ok_16:
 				p->next_unused = 0;
 				p->prev_unused = 0;
 				p->size &= ~busy_bit;//clear busy_bit
-				data_header **pu = get_first_unused_block_by_size(p->size);
+				uint32_t *pu = get_first_unused_block_by_size(p->size);
 				if (*pu)
 				{
-					p->next_unused = offs_data_header_32bit(p, *pu);
-					(*pu)->prev_unused = -p->next_unused;
+					p->next_unused = offs_data_header_32bit(p, cast_data_header_32bit(_pool_ptr, *pu));
+					cast_data_header_32bit(_pool_ptr, *pu)->prev_unused = -p->next_unused;
 				}
-				*pu = p;
+				*pu = offs_data_header_32bit(_pool_ptr, p);
 				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31);
 			};
 			data_header* find_unused_block(uint32_t size)
 			{
-				data_header
-					*p = 0,
-					**pu = get_first_unused_block_by_size(size);
+				data_header *p = 0;
 				uint32_t
+					*pu = get_first_unused_block_by_size(size),
 					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->sli_table) & 31),
 					*pbit = &_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5],
 					*pbit_end = &_pool_ptr->fli_table[fli_table_n];
-				//size &= data_alignment_mask;
 				while (1)
 				{
 					if (p == 0)
@@ -1055,7 +1049,7 @@ on_ok_16:
 						m = 31 + 1023 - (v.i[1] >> 20);
 						pu = _pool_ptr->sli_table + (m + ((pbit - _pool_ptr->fli_table) << 5));
 						m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;//shr workaround for 5 bit mask
-						p = *pu;
+						p = cast_data_header_32bit(_pool_ptr, *pu);
 
 						assert(pu < &_pool_ptr->sli_table[sli_table_n]);
 					}
