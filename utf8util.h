@@ -818,9 +818,6 @@ on_ok_16:
 		//                TLSF-like memory pool
 		//--------------------------------------------------------------
 		//
-		//VERSION 2.1
-		// - on 64-bit systems, reduce all data_header fields to 4 bytes
-		//
 		//Для 32 и 64 битных систем:
 		//1. Для выделенных блоков заголовок занимает            4 байт (только поле size).
 		//   Для освобождённых блоков заголовок занимает        16 байт.
@@ -840,6 +837,14 @@ on_ok_16:
 		//       |512-527|528-543|...|1008-1023| <= с шагом 16 байт,
 		//       |1024-1055|...                  <= с шагом 32 байт,
 		//       и т.д.
+		//
+		//VERSION 2.1
+		// - on 64-bit systems, reduce all data_header fields to 4 bytes
+		//   ptr replaced to int32_t offsets
+		//
+		//VERSION 2.0
+		// - on 32-bit systems, reduce all data_header fields to 4 bytes
+		//   on 64-bit systems, reduce all data_header fields to 8 bytes
 		//
 		//
 		//
@@ -911,7 +916,7 @@ on_ok_16:
 		};
 		struct page_header
 		{
-			uint32_t sli_table[sli_table_n]; //table of offset to first unused block
+			uint32_t sli_table[sli_table_n]; //table of offsets to first unused block
 			uint32_t fli_table[fli_table_n]; //bitmap of used data in sli_table
 			uint32_t memory_in_use;          //memory in use, bytes
 		};
@@ -1074,7 +1079,7 @@ on_ok_16:
 				assert(_pool_ptr > 0);
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
-				return (p->size & 1) == 1 ? (p->size & data_alignment_mask) - data_header_size : 0;
+				return (p->size & busy_bit) == busy_bit ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
 			void* malloc(uint32_t size)
 			{
@@ -1090,7 +1095,7 @@ on_ok_16:
 				if (p == 0)
 				{
 					assert(p > 0); return 0; //!!! for testing purpose
-					return allocator::malloc(size);
+					//return allocator::malloc(size);
 				}
 
 				//unlink unused block
@@ -1143,7 +1148,7 @@ on_ok_16:
 
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				
-				assert((p->size & busy_bit) == 1);
+				assert((p->size & busy_bit) == busy_bit);
 
 				//далее предполагается, что слева и справа от data block
 				//может быть только один unused block
