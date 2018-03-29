@@ -1133,7 +1133,7 @@ on_ok_16:
 					data_header* p_next = cast_data_header(p, unused);
 					p_next->prev = offs_data_header_32bit(p_next, p_new);
 				}
-				//update pages memory_in_use
+				//update memory_in_use
 				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
 				return cast_data_header(p, data_header_offset);
 			};
@@ -1216,14 +1216,30 @@ on_ok_16:
 				size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 				size = p->size & data_alignment_mask;
+
+				//try expand to the next free block
+				if (size_aligned > size)
+				{
+					//test busy_bit and size of next data block
+					p_next = cast_data_header(p, size);
+					if ((p_next->size & busy_bit) == 0 && (size + p_next->size) >= size_aligned)
+					{
+						unlink_unused_block(p_next);
+						size += p_next->size & data_alignment_mask;
+						//update memory_in_use
+						_pool_ptr->memory_in_use += p_next->size & data_alignment_mask;
+						p_next = cast_data_header(p, size);
+						p_next->size |= prev_busy_bit;
+					}
+				}
+
 				if (size_aligned <= size)
 				{
-					if (size - size_aligned >= data_header_bytes)
+					//truncate data block
+					size -= size_aligned;
+					if (size >= data_header_bytes)
 					{
-						//trim
-						size -= size_aligned;
 						p->size -= size;
-
 						//release free block back to the pool
 						p_next = cast_data_header(p, size_aligned);
 						p_next->size = size;
@@ -1233,14 +1249,12 @@ on_ok_16:
 				}
 				else
 				{
-					//TODO: следует ли вызывать malloc_aligned() ?
+					//force malloc new data block
 					ptr = malloc(size_aligned);
-					
 					assert(ptr > 0 && "pointer must not be 0");
-					
+					//copy data to new place
 					p_next = cast_data_header(ptr, -int(data_header_offset));
 					::memcpy_s(ptr, (p_next->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
-				
 					//free unused block
 					free(cast_data_header(p, data_header_offset));
 				}
