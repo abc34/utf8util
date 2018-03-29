@@ -1184,21 +1184,66 @@ on_ok_16:
 				assert((align & ~data_alignment_mask) == 0 && "align should be a multiple of data_alignment");
 
 				//allocate free memory block with an additional minimum block size bytes
-				void *ptr = malloc(size + data_header_bytes + align - 1);
+				void *ptr = malloc(size + data_header_bytes + align - 1);				
 				assert(ptr > 0 && "pointer must not be 0");
+				
+				//align ptr
 				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_new;			
 				size_t addr = (size_t)ptr + data_header_bytes + align - 1; addr -= addr % align; ptr = (void*)addr;
 				p_new = cast_data_header(ptr, -int(data_header_offset));
 				p_new->size = offs_data_header_32bit(p_new, cast_data_header(p, p->size & data_alignment_mask)) << 2;
-				p_new->size |= busy_bit;
-				p_new->prev = offs_data_header_32bit(p_new, p);
-
+				p_new->size |= prev_busy_bit | busy_bit;
+				
 				//release leading free block back to the pool
 				p->size -= p_new->size & data_alignment_mask;
-				//link new unused block
-				link_unused_block(p);
-				//update memory_in_use
-				_pool_ptr->memory_in_use -= p->size & data_alignment_mask;
+				free(cast_data_header(p, data_header_offset));
+				return ptr;
+			}
+			void* realloc(void* ptr, uint32_t size)
+			{
+				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size))
+				{
+					return allocator::realloc(ptr, size);
+				}
+				//treated as malloc
+				if (ptr == 0){ return malloc(size); }
+				//treated as free
+				if (size == 0) { free(ptr); return 0; }
+				//realloc
+				uint32_t size_aligned;
+				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_next;
+				//alignment of size
+				size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
+				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
+				size = p->size & data_alignment_mask;
+				if (size_aligned <= size)
+				{
+					if (size - size_aligned >= data_header_bytes)
+					{
+						//trim
+						size -= size_aligned;
+						p->size -= size;
+
+						//release free block back to the pool
+						p_next = cast_data_header(p, size_aligned);
+						p_next->size = size;
+						p_next->size |= prev_busy_bit | busy_bit;
+						free(cast_data_header(p_next, data_header_offset));
+					}
+				}
+				else
+				{
+					//TODO: следует ли вызывать malloc_aligned() ?
+					ptr = malloc(size_aligned);
+					
+					assert(ptr > 0 && "pointer must not be 0");
+					
+					p_next = cast_data_header(ptr, -int(data_header_offset));
+					::memcpy_s(ptr, (p_next->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
+				
+					//free unused block
+					free(cast_data_header(p, data_header_offset));
+				}
 				return ptr;
 			}
 
