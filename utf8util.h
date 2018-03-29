@@ -983,7 +983,7 @@ on_ok_16:
 			};
 			inline uint32_t* get_first_unused_block_by_size(uint32_t size)
 			{
-				assert(size >= data_header_bytes);
+				assert(size >= data_header_bytes && "size must be greater than or equal to data_header_bytes");
 				uint32_t sli = size >> data_alignment_bits;
 				if (sli >= sli_first_max)
 				{
@@ -1056,7 +1056,7 @@ on_ok_16:
 						m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;//shr workaround for 5 bit mask
 						p = cast_data_header_32bit(_pool_ptr, *pu);
 
-						assert(pu < &_pool_ptr->sli_table[sli_table_n]);
+						assert(pu < &_pool_ptr->sli_table[sli_table_n] && "pu must not point outside of the table");
 					}
 					if (p->size >= size) break;
 					p = p->next_unused == 0 ? 0 : cast_data_header_32bit(p, p->next_unused);
@@ -1066,24 +1066,24 @@ on_ok_16:
 		public:
 			size_t get_used_size()
 			{
-				assert(_pool_ptr > 0);
+				assert(_pool_ptr > 0 && "pointer must not be 0");
 				return _pool_ptr->memory_in_use;
 			};
 			size_t get_free_size()
 			{
-				assert(_pool_ptr > 0);
+				assert(_pool_ptr > 0 && "pointer must not be 0");
 				return _pool_size - _pool_ptr->memory_in_use;
 			};
 			size_t msize(void* ptr)
 			{//return capacity (greater than or equal to the size) of used data block, 0 otherwise
-				assert(_pool_ptr > 0);
+				assert(_pool_ptr > 0 && "pointer must not be 0");
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size)) return allocator::msize(ptr);
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				return (p->size & busy_bit) == busy_bit ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
 			void* malloc(uint32_t size)
 			{
-				assert(_pool_ptr > 0 && size > 0);
+				assert(_pool_ptr > 0 && size > 0 && "pointer and size must not be 0");
 				if (size == 0) return 0;
 
 				//alignment of size
@@ -1094,7 +1094,7 @@ on_ok_16:
 				data_header* p = find_unused_block(size_aligned);
 				if (p == 0)
 				{
-					assert(p > 0); return 0; //!!! for testing purpose
+					assert(p > 0 && "pointer must not be 0"); return 0; //!!! for testing purpose
 					//return allocator::malloc(size);
 				}
 
@@ -1139,7 +1139,7 @@ on_ok_16:
 			};
 			void free(void* ptr)
 			{
-				assert(_pool_ptr > 0);
+				assert(_pool_ptr > 0 && "pointer must not be 0");
 
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr,_pool_size))
 				{
@@ -1148,7 +1148,7 @@ on_ok_16:
 
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				
-				assert((p->size & busy_bit) == busy_bit);
+				assert((p->size & busy_bit) == busy_bit && "memory block must be busy");
 
 				//далее предполагается, что слева и справа от data block
 				//может быть только один unused block
@@ -1178,6 +1178,29 @@ on_ok_16:
 				//link new unused block
 				link_unused_block(p);
 			};
+			void* malloc_aligned(uint32_t size, uint32_t align)
+			{
+				if (align == 0 || (data_alignment % align) == 0)return malloc(size);
+				assert((align & ~data_alignment_mask) == 0 && "align should be a multiple of data_alignment");
+
+				//allocate free memory block with an additional minimum block size bytes
+				void *ptr = malloc(size + data_header_bytes + align - 1);
+				assert(ptr > 0 && "pointer must not be 0");
+				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_new;			
+				size_t addr = (size_t)ptr + data_header_bytes + align - 1; addr -= addr % align; ptr = (void*)addr;
+				p_new = cast_data_header(ptr, -int(data_header_offset));
+				p_new->size = offs_data_header_32bit(p_new, cast_data_header(p, p->size & data_alignment_mask)) << 2;
+				p_new->size |= busy_bit;
+				p_new->prev = offs_data_header_32bit(p_new, p);
+
+				//release leading free block back to the pool
+				p->size -= p_new->size & data_alignment_mask;
+				//link new unused block
+				link_unused_block(p);
+				//update memory_in_use
+				_pool_ptr->memory_in_use -= p->size & data_alignment_mask;
+				return ptr;
+			}
 
 		private:
 			page_header* _pool_ptr;
