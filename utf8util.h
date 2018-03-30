@@ -1210,39 +1210,41 @@ on_ok_16:
 				//treated as free
 				if (size == 0) { free(ptr); return 0; }
 				//realloc
-				uint32_t size_aligned;
+				uint32_t cur_size, size_aligned;
 				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_next;
 				//alignment of size
 				size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
-				size = p->size & data_alignment_mask;
+				cur_size = p->size & data_alignment_mask;
 
 				//try expand to the next free block
-				if (size_aligned > size)
+				if (size_aligned > cur_size)
 				{
 					//test busy_bit and size of next data block
-					p_next = cast_data_header(p, size);
-					if ((p_next->size & busy_bit) == 0 && (size + p_next->size) >= size_aligned)
+					p_next = cast_data_header(p, cur_size);
+					if ((p_next->size & busy_bit) == 0 && (cur_size + p_next->size) >= size_aligned)
 					{
 						unlink_unused_block(p_next);
-						size += p_next->size & data_alignment_mask;
-						//update memory_in_use
-						_pool_ptr->memory_in_use += p_next->size & data_alignment_mask;
-						p_next = cast_data_header(p, size);
+						size = p_next->size & data_alignment_mask;
+						p->size += size;
+						cur_size = p->size & data_alignment_mask;
+						p_next = cast_data_header(p, cur_size);
 						p_next->size |= prev_busy_bit;
+						//update memory_in_use
+						_pool_ptr->memory_in_use += size;
 					}
 				}
 
-				if (size_aligned <= size)
+				if (size_aligned <= cur_size)
 				{
 					//truncate data block
-					size -= size_aligned;
-					if (size >= data_header_bytes)
+					cur_size -= size_aligned;
+					if (cur_size >= data_header_bytes)
 					{
-						p->size -= size;
+						p->size -= cur_size;
 						//release free block back to the pool
 						p_next = cast_data_header(p, size_aligned);
-						p_next->size = size;
+						p_next->size = cur_size;
 						p_next->size |= prev_busy_bit | busy_bit;
 						free(cast_data_header(p_next, data_header_offset));
 					}
