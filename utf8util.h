@@ -978,7 +978,6 @@ on_ok_16:
 				//init last data_header at end pool
 				data_header* p_last = cast_data_header(p, p->size & data_alignment_mask);
 				p_last->size = 0 | busy_bit;
-				p_last->prev = offs_data_header_32bit(p_last, p);
 				return true;
 			};
 			inline uint32_t* get_first_unused_block_by_size(uint32_t size)
@@ -1022,6 +1021,11 @@ on_ok_16:
 				p->next_unused = 0;
 				p->prev_unused = 0;
 				p->size &= ~busy_bit;//clear busy_bit
+				//update prev field and prev_busy_bit of next data_header
+				data_header *p_next = cast_data_header(p, p->size & data_alignment_mask);
+				p_next->size &= ~prev_busy_bit;
+				p_next->prev = offs_data_header_32bit(p_next, p);
+				//link to list
 				uint32_t *pu = get_first_unused_block_by_size(p->size);
 				if (*pu)
 				{
@@ -1063,6 +1067,31 @@ on_ok_16:
 				}
 				return p;
 			};
+			//split unused block
+#define split_block(p, required_size) \
+			{ \
+				uint32_t size = p->size & data_alignment_mask; \
+				if (size < (required_size) + data_header_bytes) \
+				{ \
+					/*update busy_bit*/ \
+					p->size |= busy_bit; \
+					/*update prev_busy_bit of next data block*/ \
+					cast_data_header(p, size)->size |= prev_busy_bit; \
+				} \
+				else \
+				{ \
+					/*set new data block*/ \
+					p->size = (required_size) | p->size & prev_busy_bit | busy_bit; \
+					/*set new unused block*/ \
+					data_header* p_right = cast_data_header(p, (required_size)); \
+					p_right->size = size - (required_size); \
+					p_right->size |= prev_busy_bit; \
+					/*link unused block*/ \
+					link_unused_block(p_right); \
+				} \
+				/*update memory_in_use*/ \
+				_pool_ptr->memory_in_use += p->size & data_alignment_mask; \
+			}
 		public:
 			size_t get_used_size()
 			{
@@ -1101,40 +1130,8 @@ on_ok_16:
 				//unlink unused block
 				unlink_unused_block(p);
 
-				uint32_t unused = p->size & data_alignment_mask;
-				if (unused - size_aligned < data_header_bytes)
-				{
-					//если в (unused - size_aligned) нельзя вместить data_header,
-					//то занимаем весь unused block
-
-					//set new data block
-					p->size |= busy_bit;
-					//update prev_busy_bit of next data block
-					data_header* p_next = cast_data_header(p, unused);
-					p_next->size |= prev_busy_bit;
-				}
-				else
-				{
-					//если в (unused - size_aligned) можно вместить data_header,
-					//то выделим в нем data block, а оставшееся
-					//простанство установим как новый unused block
-
-					//set new data block
-					p->size = size_aligned | busy_bit | (p->size & prev_busy_bit);
-
-					//set new unused block
-					data_header* p_new = cast_data_header(p, size_aligned);
-					p_new->size = unused - size_aligned;
-					p_new->size |= prev_busy_bit;
-					//link unused block
-					link_unused_block(p_new);
-
-					//update prev of next data block
-					data_header* p_next = cast_data_header(p, unused);
-					p_next->prev = offs_data_header_32bit(p_next, p_new);
-				}
-				//update memory_in_use
-				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
+				//split unused block
+				split_block(p, size_aligned);
 				return cast_data_header(p, data_header_offset);
 			};
 			void free(void* ptr)
@@ -1171,10 +1168,6 @@ on_ok_16:
 					p = p_prev;
 				}
 				p->size = unused | (p->size & prev_busy_bit);
-				//update prev of next data_header
-				p_next = cast_data_header(p, unused);
-				p_next->size &= ~prev_busy_bit;
-				p_next->prev = offs_data_header_32bit(p_next, p);
 				//link new unused block
 				link_unused_block(p);
 			};
@@ -1199,6 +1192,9 @@ on_ok_16:
 				free(cast_data_header(p, data_header_offset));
 				return ptr;
 			}
+
+
+
 			void* realloc(void* ptr, uint32_t size)
 			{
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size))
@@ -1210,56 +1206,60 @@ on_ok_16:
 				//treated as free
 				if (size == 0) { free(ptr); return 0; }
 				//realloc
-				uint32_t cur_size, size_aligned;
-				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_next;
 				//alignment of size
-				size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
-				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
+				uint32_t required_size, cur_size, unused_left, unused_right, join_size;
+				required_size = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
+				if (required_size < data_header_bytes) required_size = data_header_bytes;
+				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_right, *p_left;
 				cur_size = p->size & data_alignment_mask;
 
-				//try expand to the next free block
-				if (size_aligned > cur_size)
+				//test for current block capacity enough
+				if (required_size <= cur_size)
 				{
-					//test busy_bit and size of next data block
-					p_next = cast_data_header(p, cur_size);
-					if ((p_next->size & busy_bit) == 0 && (cur_size + p_next->size) >= size_aligned)
-					{
-						unlink_unused_block(p_next);
-						size = p_next->size & data_alignment_mask;
-						p->size += size;
-						cur_size = p->size & data_alignment_mask;
-						p_next = cast_data_header(p, cur_size);
-						p_next->size |= prev_busy_bit;
-						//update memory_in_use
-						_pool_ptr->memory_in_use += size;
-					}
+					return ptr;
 				}
-
-				if (size_aligned <= cur_size)
+				//there is no need to move the data block
+				//test the right data block for growth and if necessary, increase the size
+				p_right = cast_data_header(p, cur_size);
+				unused_right = (p_right->size & busy_bit) == busy_bit ? 0 : p_right->size & data_alignment_mask;
+				join_size = cur_size + unused_right;
+				if (join_size >= required_size)
 				{
-					//truncate data block
-					cur_size -= size_aligned;
-					if (cur_size >= data_header_bytes)
-					{
-						p->size -= cur_size;
-						//release free block back to the pool
-						p_next = cast_data_header(p, size_aligned);
-						p_next->size = cur_size;
-						p_next->size |= prev_busy_bit | busy_bit;
-						free(cast_data_header(p_next, data_header_offset));
-					}
+					unlink_unused_block(p_right);
+					p->size += unused_right;
+					//split unused block
+					split_block(p, required_size);
+					//update memory_in_use
+					_pool_ptr->memory_in_use -= cur_size;
+					return ptr;
 				}
-				else
+				//there is a need to move the data block
+				//test the right data block for growth and if necessary, increase the size
+				unused_left = (p->size & prev_busy_bit) == prev_busy_bit ? 0 : p->prev << 2;
+				join_size += unused_left;
+				if (join_size >= required_size)
 				{
-					//force malloc new data block
-					ptr = malloc(size_aligned);
-					assert(ptr > 0 && "pointer must not be 0");
+					p_left = cast_data_header_32bit(p, p->prev);
+					unlink_unused_block(p_left);
+					if (unused_right) unlink_unused_block(p_right);
+					p_left->size = join_size | prev_busy_bit | busy_bit;
+					ptr = cast_data_header(p_left, data_header_offset);
 					//copy data to new place
-					p_next = cast_data_header(ptr, -int(data_header_offset));
-					::memcpy_s(ptr, (p_next->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
-					//free unused block
-					free(cast_data_header(p, data_header_offset));
+					::memcpy_s(ptr, (p_left->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
+					//split unused block
+					split_block(p_left, required_size);
+					//update memory_in_use
+					_pool_ptr->memory_in_use -= cur_size;
+					return ptr;
 				}
+				//force malloc new data block
+				ptr = malloc(required_size);
+				assert(ptr > 0 && "pointer must not be 0");
+				//copy data to new place
+				data_header* p_new = cast_data_header(ptr, -int(data_header_offset));
+				::memcpy_s(ptr, (p_new->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
+				//release free block back to the pool
+				free(cast_data_header(p, data_header_offset));
 				return ptr;
 			}
 
