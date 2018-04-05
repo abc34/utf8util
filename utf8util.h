@@ -827,7 +827,7 @@ on_ok_16:
 		//5. Размер sli_table для хранения списков unused blocks
 		//   (при sli_bits = 5)           равен 828 = 828*4 = 3312 байт.
 		//6. Максимальный размер блока не может превышать величины
-		//   (при sli_bits = 5)                 (pool_size - 3424) байт.
+		//   (при sli_bits = 5)                = pool_size - 3424  байт.
 		//7. Свободные блоки с размерами < sli_first_max*data_alignment,
 		//   (при sli_bits = 5) sli_first_max*data_alignment = 256 байт,
 		//   попадают в sli_table в соответствии с диапазонами:
@@ -839,8 +839,11 @@ on_ok_16:
 		//       и т.д.
 		//
 		//VERSION 2.1
-		// - on 64-bit systems, reduce all data_header fields to 4 bytes
-		//   ptr replaced to int32_t offsets
+		// - on 32-bit systems, reduce all data_header fields to 4 bytes
+		//   on 64-bit systems, reduce all data_header fields to 8 bytes
+		// - ptr replaced to int32_t offsets
+		// - added malloc_aligned()
+		// - added realloc()
 		//
 		//VERSION 2.0
 		// - on 32-bit systems, reduce all data_header fields to 4 bytes
@@ -875,7 +878,6 @@ on_ok_16:
 		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
 		//Возможно можно не вычислять sli, если вместо size хранить его sli.
 		//Можно все указатели сделать uint32_t*, вместо uint8_t*.
-		//Сделать aligned malloc.
 
 
 		//set default memory allocation functions
@@ -965,11 +967,9 @@ on_ok_16:
 					|| ((reinterpret_cast<size_t>(pool) | data_alignment) & (data_alignment - 1)) != 0) return false;
 				_pool_ptr = static_cast<page_header*>(pool);
 				_pool_size = size & data_alignment_mask;
-
 				//init page header
 				::memset(_pool_ptr, 0, page_header_bytes);
 				_pool_ptr->memory_in_use = page_header_bytes + data_header_size;
-
 				//init first data_header
 				data_header* p = cast_data_header(_pool_ptr, page_header_bytes + data_header_size - data_header_offset);
 				p->size = _pool_size - page_header_bytes - data_header_size;
@@ -1112,11 +1112,9 @@ on_ok_16:
 			{
 				assert(_pool_ptr > 0 && size > 0 && "pointer and size must not be 0");
 				if (size == 0) return 0;
-
 				//alignment of size
 				uint32_t size_aligned = (size + data_header_size + data_alignment - 1) & data_alignment_mask;
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
-
 				//find unused block
 				data_header* p = find_unused_block(size_aligned);
 				if (p == 0)
