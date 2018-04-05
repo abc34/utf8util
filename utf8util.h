@@ -1089,8 +1089,6 @@ on_ok_16:
 					/*link unused block*/ \
 					link_unused_block(p_right); \
 				} \
-				/*update memory_in_use*/ \
-				_pool_ptr->memory_in_use += p->size & data_alignment_mask; \
 			}
 		public:
 			size_t get_used_size()
@@ -1126,12 +1124,12 @@ on_ok_16:
 					assert(p > 0 && "pointer must not be 0"); return 0; //!!! for testing purpose
 					//return allocator::malloc(size);
 				}
-
 				//unlink unused block
 				unlink_unused_block(p);
-
 				//split unused block
 				split_block(p, size_aligned);
+				//update memory_in_use
+				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
 				return cast_data_header(p, data_header_offset);
 			};
 			void free(void* ptr)
@@ -1192,9 +1190,6 @@ on_ok_16:
 				free(cast_data_header(p, data_header_offset));
 				return ptr;
 			}
-
-
-
 			void* realloc(void* ptr, uint32_t size)
 			{
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size))
@@ -1230,12 +1225,12 @@ on_ok_16:
 					//split unused block
 					split_block(p, required_size);
 					//update memory_in_use
-					_pool_ptr->memory_in_use -= cur_size;
+					_pool_ptr->memory_in_use += (p->size & data_alignment_mask) - cur_size;
 					return ptr;
 				}
 				//there is a need to move the data block
 				//test the right data block for growth and if necessary, increase the size
-				unused_left = (p->size & prev_busy_bit) == prev_busy_bit ? 0 : p->prev << 2;
+				unused_left = (p->size & prev_busy_bit) == prev_busy_bit ? 0 : (-p->prev) << 2;
 				join_size += unused_left;
 				if (join_size >= required_size)
 				{
@@ -1249,7 +1244,7 @@ on_ok_16:
 					//split unused block
 					split_block(p_left, required_size);
 					//update memory_in_use
-					_pool_ptr->memory_in_use -= cur_size;
+					_pool_ptr->memory_in_use += (p_left->size & data_alignment_mask) - cur_size;
 					return ptr;
 				}
 				//force malloc new data block
