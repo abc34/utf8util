@@ -1209,6 +1209,10 @@ on_ok_16:
 				//test for current block capacity enough
 				if (required_size <= cur_size)
 				{
+					//split unused block
+					split_block(p, required_size);
+					//update memory_in_use
+					_pool_ptr->memory_in_use += (p->size & data_alignment_mask) - cur_size;
 					return ptr;
 				}
 				//there is no need to move the data block
