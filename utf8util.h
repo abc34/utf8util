@@ -817,6 +817,10 @@ on_ok_16:
 		//--------------------------------------------------------------
 		//                TLSF-like memory pool
 		//--------------------------------------------------------------
+		// Sources:
+		// https://github.com/mattconte/tlsf
+		// http://www.gii.upv.es/tlsf/main/docs
+		// https://code.google.com/archive/p/compcache/wikis/xvMalloc.wiki
 		//
 		//Для 32 и 64 битных систем:
 		//1. Для выделенных блоков заголовок занимает            4 байт (только поле size).
