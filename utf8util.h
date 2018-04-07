@@ -1068,7 +1068,7 @@ on_ok_16:
 				return p;
 			};
 			//split unused block
-#define split_block(p, required_size) \
+#define split_block(p, required_size, sub_size) \
 			{ \
 				uint32_t size = p->size & data_alignment_mask; \
 				if (size < (required_size) + data_header_bytes) \
@@ -1081,7 +1081,7 @@ on_ok_16:
 				else \
 				{ \
 					/*set new data block*/ \
-					p->size = (required_size) | p->size & prev_busy_bit | busy_bit; \
+					p->size = (required_size) | (p->size & prev_busy_bit) | busy_bit; \
 					/*set new unused block*/ \
 					data_header* p_right = cast_data_header(p, (required_size)); \
 					p_right->size = size - (required_size); \
@@ -1089,6 +1089,8 @@ on_ok_16:
 					/*link unused block*/ \
 					link_unused_block(p_right); \
 				} \
+				/*update memory_in_use*/ \
+				_pool_ptr->memory_in_use += (p->size & data_alignment_mask) - (sub_size); \
 			}
 		public:
 			size_t get_used_size()
@@ -1125,9 +1127,7 @@ on_ok_16:
 				//unlink unused block
 				unlink_unused_block(p);
 				//split unused block
-				split_block(p, size_aligned);
-				//update memory_in_use
-				_pool_ptr->memory_in_use += p->size & data_alignment_mask;
+				split_block(p, size_aligned, 0);
 				return cast_data_header(p, data_header_offset);
 			};
 			void free(void* ptr)
@@ -1206,16 +1206,14 @@ on_ok_16:
 				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_right, *p_left;
 				cur_size = p->size & data_alignment_mask;
 
+				//there is no need to move the data block
 				//test for current block capacity enough
 				if (required_size <= cur_size)
 				{
 					//split unused block
-					split_block(p, required_size);
-					//update memory_in_use
-					_pool_ptr->memory_in_use += (p->size & data_alignment_mask) - cur_size;
+					split_block(p, required_size, cur_size);
 					return ptr;
 				}
-				//there is no need to move the data block
 				//test the right data block for growth and if necessary, increase the size
 				p_right = cast_data_header(p, cur_size);
 				unused_right = (p_right->size & busy_bit) == busy_bit ? 0 : p_right->size & data_alignment_mask;
@@ -1225,9 +1223,7 @@ on_ok_16:
 					unlink_unused_block(p_right);
 					p->size += unused_right;
 					//split unused block
-					split_block(p, required_size);
-					//update memory_in_use
-					_pool_ptr->memory_in_use += (p->size & data_alignment_mask) - cur_size;
+					split_block(p, required_size, cur_size);
 					return ptr;
 				}
 				//there is a need to move the data block
@@ -1244,9 +1240,7 @@ on_ok_16:
 					//copy data to new place
 					::memcpy_s(ptr, (p_left->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
 					//split unused block
-					split_block(p_left, required_size);
-					//update memory_in_use
-					_pool_ptr->memory_in_use += (p_left->size & data_alignment_mask) - cur_size;
+					split_block(p_left, required_size, cur_size);
 					return ptr;
 				}
 				//force malloc new data block
