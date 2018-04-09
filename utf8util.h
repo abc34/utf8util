@@ -119,8 +119,7 @@ namespace LZ
 		//option     - OPT_*, for OPT_BREAKON_INVALID return validity status on first error
 		//vi         - ptr to validation_info struct, or nullptr
 		//return RESULT_OK on success or ERROR_UTF8_* on error occurs
-		uint8_t
-			utf8_validation(uint8_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
+		uint8_t utf8_validation(uint8_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
 		{
 			uint8_t ret = RESULT_OK;
 			uint32_t ncount32 = 0, ncount16 = 0, nerrors = 0, len = src_length;
@@ -188,8 +187,7 @@ namespace LZ
 		//option     - OPT_*, for OPT_BREAKON_INVALID return validity status on first error
 		//vi         - ptr to validation_info struct, or nullptr
 		//return RESULT_OK on success or ERROR_UTF16_* on error occurs
-		uint8_t
-			utf16_validation(uint16_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
+		uint8_t utf16_validation(uint16_t* src, uint32_t src_length, uint8_t option, validation_info* vi)
 		{
 			uint8_t ret = RESULT_OK;
 			uint16_t c, *src_end = src + src_length;
@@ -236,17 +234,30 @@ namespace LZ
 		//counting the number uint16 data elements nedeed to convert utf8 to utf16
 		//src_length - src length, uint8_t elements
 		//unsafe, for valid utf8, but fast
-		__inline uint32_t
-			utf8to16_length_unsafe(uint8_t* src, uint32_t src_length)
+		//uint32_t utf8to16_length_unsafe(uint8_t* src, uint32_t src_length)
+		//{
+		//	uint32_t i = 0, ncount = 0;
+		//	while (i < src_length)
+		//	{
+		//		uint8_t c = src[i];
+		//		if (c < 0x80) { i += 1; }
+		//		else if (c < 0xE0) { i += 2; }
+		//		else if (c < 0xF0) { i += 3; }
+		//		else { i += 4; ncount++; }
+		//		ncount++;
+		//	}
+		//	return ncount;
+		//}
+		uint32_t utf8to16_length_unsafe(uint8_t* src, uint32_t src_length)
 		{
 			uint32_t i = 0, ncount = 0;
 			while (i < src_length)
 			{
-				uint8_t c = src[i];
-				if (c < 0x80) { i += 1; }
-				else if (c < 0xE0) { i += 2; }
-				else if (c == 0xE0) { i += 3; }
-				else { i += 4; ncount++; }
+				int8_t c = src[i];
+				if (c >= 0) { i++; }          // 0 ... 127
+				else if (c < -32) { i += 2; } //-64...-33
+				else if (c < -16) { i += 3; } //-32...-17
+				else { i += 4; ncount++; }    //-16...-1
 				ncount++;
 			}
 			return ncount;
@@ -254,8 +265,7 @@ namespace LZ
 		//counting the number uint16 data elements nedeed to convert utf8 to utf16
 		//src_length - src length, uint8_t elements
 		//option     - OPT_*
-		uint32_t
-			utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
+		uint32_t utf8to16_length(uint8_t* src, uint32_t src_length, uint8_t option)
 		{
 			uint32_t ncount = 0, nerrors = 0;
 			while (src_length > 0)
@@ -306,8 +316,7 @@ namespace LZ
 		//counting the number uint8 data elements nedeed to convert utf16 to utf8
 		//src_length - src length, uint16_t elements
 		//option     - OPT_*
-		uint32_t
-			utf16to8_length(uint16_t* src, uint32_t src_length, uint8_t option)
+		uint32_t utf16to8_length(uint16_t* src, uint32_t src_length, uint8_t option)
 		{
 			uint16_t *src_end = src + src_length;
 			uint32_t ncount = 0;
@@ -326,12 +335,15 @@ namespace LZ
 			}
 			return ncount;
 		}
+		//counting the number uint8 data elements nedeed to convert utf16 to utf8
+		//src_length - src length, uint16_t elements
+		//unsafe, for valid utf16, but fast
+#define utf16to8_length_unsafe(src, src_length) utf16to8_length((src), (src_length), OPT_REPLACE_INVALID)
 
 		//counting the number uint32 data elements nedeed to convert utf8 to utf32
 		//src_length - src length, uint8_t elements
 		//unsafe, for valid utf8, but fast
-		__inline uint32_t
-			utf8to32_length_unsafe(uint8_t* src, uint32_t src_length)
+		uint32_t utf8to32_length_unsafe(uint8_t* src, uint32_t src_length)
 		{
 			uint32_t i = 0, ncount = 0;
 			while (i < src_length)
@@ -345,11 +357,24 @@ namespace LZ
 			}
 			return ncount;
 		}
+		//uint32_t utf8to32_length_unsafe_(uint8_t* src, uint32_t src_length)
+		//{
+		//	uint32_t i = 0, ncount = 0;
+		//	while (i < src_length)
+		//	{
+		//		int8_t c = src[i];
+		//		if (c >= 0) { i += 1; }       // 0 ... 127
+		//		else if (c < -32) { i += 2; } //-64...-33
+		//		else if (c < -16) { i += 3; } //-32...-17
+		//		else { i += 4; }              //-16...-1
+		//		ncount++;
+		//	}
+		//	return ncount;
+		//}
 		//counting the number uint32 data elements nedeed to convert utf8 to utf32
 		//src_length - src length, uint8_t elements
 		//option     - OPT_*
-		uint32_t
-			utf8to32_length(uint8_t* src, uint32_t src_length, uint8_t option)
+		uint32_t utf8to32_length(uint8_t* src, uint32_t src_length, uint8_t option)
 		{
 			uint32_t ncount = 0, nerrors = 0;
 			while (src_length > 0)
@@ -399,8 +424,7 @@ namespace LZ
 		//counting the number uint8 nedeed to convert utf32 to utf8
 		//src_length - src length, uint32_t elements
 		//option     - OPT_*
-		uint32_t
-			utf32to8_length(uint32_t* src, uint32_t src_length, uint8_t option)
+		uint32_t utf32to8_length(uint32_t* src, uint32_t src_length, uint8_t option)
 		{
 			uint32_t ncount = 0;
 			uint32_t c, *src_end = src + src_length;
@@ -419,6 +443,10 @@ namespace LZ
 			}
 			return ncount;
 		}
+		//counting the number uint8 nedeed to convert utf32 to utf8
+		//src_length - src length, uint32_t elements
+		//unsafe, for valid utf32, but fast
+#define utf32to8_length_unsafe(src, src_length) utf32to8_length((src), (src_length), OPT_REPLACE_INVALID)
 
 #define UTF8_DECODE(cp, src, src_length, option) \
 	{ \
@@ -654,8 +682,7 @@ on_ok_16:
 		//convert utf8 string to utf32 string
 		//src_length - src string length, uint8_t elements
 		//dst_length - dst string length, uint32_t elements
-		uint8_t
-			utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t option)
+		uint8_t utf8to32(uint8_t* src, uint32_t src_length, uint32_t* dst, uint32_t dst_length, uint8_t option)
 		{
 			uint32_t i = 0, cp;
 			//test BOM: 0xEF,0xBB,0xBF and skip it
@@ -670,8 +697,7 @@ on_ok_16:
 		//convert utf32 string to utf8 string
 		//src_length - src string length, uint32_t elements
 		//dst_length - dst string length, uint8_t elements
-		uint8_t
-			utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
+		uint8_t utf32to8(uint32_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 		{
 			uint32_t i = 0, cp;
 			//test BOM: 0x0000FEFF and skip it
@@ -686,8 +712,7 @@ on_ok_16:
 		//convert utf8 string to utf16 string
 		//src_length - src string length, uint8_t elements
 		//dst_length - dst string length, uint16_t elements
-		uint8_t
-			utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t option)
+		uint8_t utf8to16(uint8_t* src, uint32_t src_length, uint16_t* dst, uint32_t dst_length, uint8_t option)
 		{
 			uint32_t i = 0, cp;
 			//test BOM: 0xEF,0xBB,0xBF and skip it
@@ -702,8 +727,7 @@ on_ok_16:
 		//convert utf16 string to utf8 string
 		//src_length - src string length, uint16_t elements
 		//dst_length - dst string length, uint8_t elements
-		uint8_t
-			utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
+		uint8_t utf16to8(uint16_t* src, uint32_t src_length, uint8_t* dst, uint32_t dst_length, uint8_t option)
 		{
 			uint32_t i = 0, cp;
 			//test BOM: 0xFEFF and skip it
@@ -829,7 +853,7 @@ on_ok_16:
 		//3. Размеры выделяемых блоков выравниваются          до 4 байт.
 		//4. Минимальный размер блока равен                     16 байт (min capacity = 12 байт).
 		//5. Размер sli_table для хранения списков unused blocks
-		//   (при sli_bits = 5)           равен 828 = 828*4 = 3312 байт.
+		//   (при sli_bits = 5)        равен 828 эл.= 828*4 = 3312 байт.
 		//6. Максимальный размер блока не может превышать величины
 		//   (при sli_bits = 5)                = pool_size - 3424  байт.
 		//7. Свободные блоки с размерами < sli_first_max*data_alignment,
@@ -844,8 +868,8 @@ on_ok_16:
 		//
 		//VERSION 2.1
 		// - on 32-bit systems, reduce all data_header fields to 4 bytes
-		//   on 64-bit systems, reduce all data_header fields to 8 bytes
-		// - ptr replaced to int32_t offsets
+		//   on 64-bit systems, reduce all data_header fields to 4 bytes
+		// - ptr replaced to int32_t offsets (4 bytes)
 		// - added malloc_aligned()
 		// - added realloc()
 		//
@@ -880,7 +904,7 @@ on_ok_16:
 		//  В этом случае для определения 1,2,3 или 4 байт можно использовать 2 и 3 биты size.
 		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
 		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
-		//Возможно можно не вычислять sli, если вместо size хранить его sli.
+		//Возможно можно не вычислять sli, если вместе с size хранить его sli.
 		//Можно все указатели сделать uint32_t*, вместо uint8_t*.
 
 
