@@ -945,6 +945,9 @@ on_ok_16:
 			uint32_t size;         //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
 			 int32_t next_unused;  //offset to next unused block     (if busy_bit == 0)
 			 int32_t prev_unused;  //offset to previous unused block (if busy_bit == 0)
+//------------------
+//---		uint32_t sli;          //sli value for size field        (if size > 16)
+//------------------
 		};
 		struct page_header
 		{
@@ -1025,6 +1028,14 @@ on_ok_16:
 			};
 			void unlink_unused_block(data_header* p)
 			{
+				//------------------
+				//---restore sli value
+				//---assert((data_header_bytes >> data_alignment_bits) <= sli_first_max);
+				//---uint32_t sli = p->size >> data_alignment_bits;
+				//---if (sli > sli_first_max) sli = p->sli; else sli -= data_header_bytes / data_alignment;
+				//---uint32_t *pu = &_pool_ptr->sli_table[sli];
+				//---assert(pu == get_first_unused_block_by_size(p->size));
+				//------------------
 				uint32_t *pu = get_first_unused_block_by_size(p->size);
 				if (p->prev_unused)
 				{
@@ -1057,6 +1068,10 @@ on_ok_16:
 				p_next->prev = offs_data_header_32bit(p_next, p);
 				//link to list
 				uint32_t *pu = get_first_unused_block_by_size(p->size);
+				//------------------
+				//---store sli value
+				//---if ((p->size >> data_alignment_bits) > sli_first_max){ p->sli = offs_data_header_32bit(_pool_ptr->sli_table, pu); }
+				//------------------
 				if (*pu)
 				{
 					p->next_unused = offs_data_header_32bit(p, cast_data_header_32bit(_pool_ptr, *pu));
@@ -1275,7 +1290,7 @@ on_ok_16:
 					p_left->size = join_size | prev_busy_bit | busy_bit;
 					ptr = cast_data_header(p_left, data_header_offset);
 					//copy data to new place
-					::memcpy_s(ptr, (p_left->size & data_alignment_mask) - data_header_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
+					::memcpy_s(ptr, required_size, cast_data_header(p, data_header_offset), cur_size - data_header_size);
 					//split unused block
 					split_block(p_left, required_size, cur_size);
 					return ptr;
@@ -1287,7 +1302,7 @@ on_ok_16:
 #endif
 				if (ptr == 0) { return 0; }
 				//copy data to new place
-				::memcpy_s(ptr, required_size, cast_data_header(p, data_header_offset), (p->size & data_alignment_mask) - data_header_size);
+				::memcpy_s(ptr, required_size, cast_data_header(p, data_header_offset), cur_size - data_header_size);
 				//release free block back to the pool
 				free(cast_data_header(p, data_header_offset));
 				return ptr;
@@ -1297,6 +1312,26 @@ on_ok_16:
 			page_header* _pool_ptr;
 			uint32_t     _pool_size;
 		};
+
+
+#undef data_alignment
+#undef data_alignment_bits
+#undef data_alignment_mask
+#undef data_header_size
+#undef data_header_bytes
+#undef data_header_offset
+#undef default_pool_size
+#undef busy_bit
+#undef prev_busy_bit
+#undef sli_bits
+#undef sli_first_max
+#undef sli_table_n
+#undef fli_table_n
+#undef page_header_bytes
+#undef cast_data_header
+#undef cast_data_header_32bit
+#undef offs_data_header_32bit
+#undef split_block
 
 #if 0
 		//firefox javascript scratchpad
