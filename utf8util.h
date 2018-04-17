@@ -852,13 +852,13 @@ on_ok_16:
 		//2. Адрес выделяемого блока выравнивается            до 4 байт.
 		//3. Размеры выделяемых блоков выравниваются          до 4 байт.
 		//4. Минимальный размер блока равен                     16 байт (min capacity = 12 байт).
-		//5. Размер sli_table для хранения списков unused blocks
-		//   (при sli_bits = 5)        равен 828 эл.= 828*4 = 3312 байт.
+		//5. Размер fti_table для хранения списков unused blocks
+		//   (при fti_bits = 5)        равен 828 эл.= 828*4 = 3312 байт.
 		//6. Максимальный размер блока не может превышать величины
-		//   (при sli_bits = 5)                = pool_size - 3424  байт.
-		//7. Свободные блоки с размерами < sli_first_max*data_alignment,
-		//   (при sli_bits = 5) sli_first_max*data_alignment = 256 байт,
-		//   попадают в sli_table в соответствии с диапазонами:
+		//   (при fti_bits = 5)                 = pool_size - 3424 байт.
+		//7. Свободные блоки с размерами < fti_first_max*data_alignment,
+		//   (при fti_bits = 5) fti_first_max*data_alignment = 256 байт,
+		//   попадают в fti_table в соответствии с диапазонами:
 		//       |16-19|20-23|...|254-255|       <= с шагом 4 байта,
 		//   далее шаг удваивается с пропорциональным удвоением диапазона:
 		//       |256-263|264-271|...|504-511|   <= с шагом 8 байт,
@@ -904,7 +904,7 @@ on_ok_16:
 		//  В этом случае для определения 1,2,3 или 4 байт можно использовать 2 и 3 биты size.
 		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
 		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
-		//Можно не вычислять sli, если вместе с size хранить его sli.
+		//Можно не вычислять fti, если вместе с size хранить его fti.
 		//Можно все указатели сделать uint32_t*, вместо uint8_t*.
 
 
@@ -927,11 +927,11 @@ on_ok_16:
 #define default_pool_size    0x40000UL
 #define busy_bit             1
 #define prev_busy_bit        2
-#define sli_bits             5
-#define sli_first_max        (1UL<<(sli_bits + 1))
-#define sli_table_n          (((32 - data_alignment_bits - sli_bits + 1) << sli_bits) - (data_header_bytes / data_alignment))
-#define fli_table_n          ((sli_table_n + 31)/32)
-#define page_header_bytes    ((sli_table_n + fli_table_n + 1)*4)
+#define fti_bits             5
+#define fti_first_max        (1UL<<(fti_bits + 1))
+#define fti_table_n          (((32 - data_alignment_bits - fti_bits + 1) << fti_bits) - (data_header_bytes / data_alignment))
+#define sti_table_n          ((fti_table_n + 31)/32)
+#define page_header_bytes    ((fti_table_n + sti_table_n + 1)*4)
 #define cast_data_header(p, offset)  reinterpret_cast<data_header*>(reinterpret_cast<uint8_t*>(p) + (offset))
 //cast and offset by 4 byte words
 #define cast_data_header_32bit(p, offs)  reinterpret_cast<data_header*>(reinterpret_cast<uint32_t*>(p) + (offs))
@@ -946,13 +946,13 @@ on_ok_16:
 			 int32_t next_unused;  //offset to next unused block     (if busy_bit == 0)
 			 int32_t prev_unused;  //offset to previous unused block (if busy_bit == 0)
 //------------------
-//---		uint32_t sli;          //sli value for size field        (if size > 16)
+//---		uint32_t fti;          //fti value for size field        (if size > 16)
 //------------------
 		};
 		struct page_header
 		{
-			uint32_t sli_table[sli_table_n]; //table of offsets to first unused block
-			uint32_t fli_table[fli_table_n]; //bitmap of used data in sli_table
+			uint32_t fti_table[fti_table_n]; //first table  - offsets to first unused block
+			uint32_t sti_table[sti_table_n]; //second table - bitmap of used cells in fti_table
 			uint32_t memory_in_use;          //memory in use, bytes
 		};
 
@@ -1016,26 +1016,18 @@ on_ok_16:
 			inline uint32_t* get_first_unused_block_by_size(uint32_t size)
 			{
 				assert(size >= data_header_bytes && "size must be greater than or equal to data_header_bytes");
-				uint32_t sli = size >> data_alignment_bits;
-				if (sli >= sli_first_max)
+				uint32_t fti = size >> data_alignment_bits;
+				if (fti >= fti_first_max)
 				{
-					register union { double d; uint32_t i[2]; }v = { (double)sli };
-					v.i[1] = (v.i[1] >> 20) - 1023 - sli_bits;
-					sli = (v.i[1] << sli_bits) + (sli >> v.i[1]);
+					register union { double d; uint32_t i[2]; }v = { (double)fti };
+					v.i[1] = (v.i[1] >> 20) - 1023 - fti_bits;
+					fti = (v.i[1] << fti_bits) + (fti >> v.i[1]);
 				}
-				sli -= data_header_bytes / data_alignment;
-				return &_pool_ptr->sli_table[sli];
+				fti -= data_header_bytes / data_alignment;
+				return &_pool_ptr->fti_table[fti];
 			};
 			void unlink_unused_block(data_header* p)
 			{
-				//------------------
-				//---restore sli value
-				//---assert((data_header_bytes >> data_alignment_bits) <= sli_first_max);
-				//---uint32_t sli = p->size >> data_alignment_bits;
-				//---if (sli > sli_first_max) sli = p->sli; else sli -= data_header_bytes / data_alignment;
-				//---uint32_t *pu = &_pool_ptr->sli_table[sli];
-				//---assert(pu == get_first_unused_block_by_size(p->size));
-				//------------------
 				if (p->prev_unused)
 				{
 					if (p->next_unused) cast_data_header_32bit(p, p->prev_unused)->next_unused += p->next_unused;
@@ -1048,12 +1040,20 @@ on_ok_16:
 				}
 				if (p->prev_unused == 0)
 				{
+					//------------------
+					//---restore fti value
+					//---assert((data_header_bytes >> data_alignment_bits) <= fti_first_max);
+					//---uint32_t fti = (p->size >> data_alignment_bits) - data_header_bytes / data_alignment;
+					//---if (fti > (fti_first_max - data_header_bytes / data_alignment)) fti = p->fti;
+					//---uint32_t *pu = &_pool_ptr->fti_table[fti];
+					//---assert(pu == get_first_unused_block_by_size(p->size));
+					//------------------
 					uint32_t *pu = get_first_unused_block_by_size(p->size);
 					if (p->next_unused) *pu = offs_data_header_32bit(_pool_ptr, cast_data_header_32bit(p, p->next_unused));
 					else
 					{
 						*pu = 0;
-						_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31));
+						_pool_ptr->sti_table[(pu - _pool_ptr->fti_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->fti_table) & 31));
 					}
 				}
 			};
@@ -1069,8 +1069,8 @@ on_ok_16:
 				//link to list
 				uint32_t *pu = get_first_unused_block_by_size(p->size);
 				//------------------
-				//---store sli value
-				//---if ((p->size >> data_alignment_bits) > sli_first_max){ p->sli = offs_data_header_32bit(_pool_ptr->sli_table, pu); }
+				//---store fti value
+				//---if ((p->size >> data_alignment_bits) > fti_first_max){ p->fti = offs_data_header_32bit(_pool_ptr->fti_table, pu); }
 				//------------------
 				if (*pu)
 				{
@@ -1078,16 +1078,16 @@ on_ok_16:
 					cast_data_header_32bit(_pool_ptr, *pu)->prev_unused = -p->next_unused;
 				}
 				*pu = offs_data_header_32bit(_pool_ptr, p);
-				_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31);
+				_pool_ptr->sti_table[(pu - _pool_ptr->fti_table) >> 5] |= 0x80000000UL >> ((pu - _pool_ptr->fti_table) & 31);
 			};
 			data_header* find_unused_block(uint32_t size)
 			{
 				data_header *p = 0;
 				uint32_t
 					*pu = get_first_unused_block_by_size(size),
-					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->sli_table) & 31),
-					*pbit = &_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5],
-					*pbit_end = &_pool_ptr->fli_table[fli_table_n];
+					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->fti_table) & 31),
+					*pbit = &_pool_ptr->sti_table[(pu - _pool_ptr->fti_table) >> 5],
+					*pbit_end = &_pool_ptr->sti_table[sti_table_n];
 				while (1)
 				{
 					if (p == 0)
@@ -1101,11 +1101,11 @@ on_ok_16:
 						}
 						register union { double d; int32_t i[2]; }v = { (double)m };
 						m = 31 + 1023 - (v.i[1] >> 20);
-						pu = _pool_ptr->sli_table + (m + ((pbit - _pool_ptr->fli_table) << 5));
+						pu = _pool_ptr->fti_table + (m + ((pbit - _pool_ptr->sti_table) << 5));
 						m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;//shr workaround for 5 bit mask
 						p = cast_data_header_32bit(_pool_ptr, *pu);
 
-						assert(pu < &_pool_ptr->sli_table[sli_table_n] && "pu must not point outside of the table");
+						assert(pu < &_pool_ptr->fti_table[fti_table_n] && "pu must not point outside of the table");
 					}
 					if (p->size >= size) break;
 					p = p->next_unused == 0 ? 0 : cast_data_header_32bit(p, p->next_unused);
@@ -1323,10 +1323,10 @@ on_ok_16:
 #undef default_pool_size
 #undef busy_bit
 #undef prev_busy_bit
-#undef sli_bits
-#undef sli_first_max
-#undef sli_table_n
-#undef fli_table_n
+#undef fti_bits
+#undef fti_first_max
+#undef fti_table_n
+#undef sti_table_n
 #undef page_header_bytes
 #undef cast_data_header
 #undef cast_data_header_32bit
@@ -1336,20 +1336,20 @@ on_ok_16:
 
 #if 0
 		//firefox javascript scratchpad
-		//for calculation sli_table_n
-		var SLI = 5, align = 4, min_size = 16;
+		//for calculation fti_table_n
+		var FTI = 5, align = 4, min_size = 16;
 		function cl(s, k) { return Math.trunc(s*Math.pow(2, -k))*Math.pow(2, k); }
 		var f = function(size)
 		{
 			if (size < min_size) size = min_size;
-			var m = 0, i = 0, sli = Math.trunc(size / align), sli_first_max = 1 << (SLI + 1);
-			if (sli >= sli_first_max)
+			var m = 0, i = 0, fti = Math.trunc(size / align), fti_first_max = 1 << (FTI + 1);
+			if (fti >= fti_first_max)
 			{
-				i = Math.floor(Math.log2(sli)) - SLI;
-				//sli = (i<<SLI) + (sli>>i);
-				sli = Math.pow(2, SLI)*i + Math.trunc(Math.pow(2, -i)*sli);
+				i = Math.floor(Math.log2(fti)) - FTI;
+				//fti = (i<<FTI) + (fti>>i);
+				fti = Math.pow(2, FTI)*i + Math.trunc(Math.pow(2, -i)*fti);
 			}
-			return[cl(size / align, i)*align, (cl(size / align, i) + Math.pow(2, i))*align - 1, sli - min_size / align];
+			return[cl(size / align, i)*align, (cl(size / align, i) + Math.pow(2, i))*align - 1, fti - min_size / align];
 		}
 		console.log(f(Math.pow(2, 32)));//2^32 =  4 GB, sli_table_n = 828
 		console.log(f(Math.pow(2, 33)));//2^33 =  8 GB, sli_table_n = 860
