@@ -1007,10 +1007,10 @@ on_ok_16:
 				data_header* p = cast_data_header(_pool_ptr, page_header_bytes + data_header_size - data_header_offset);
 				p->size = _pool_size - page_header_bytes - data_header_size;
 				p->size |= prev_busy_bit;
-				link_unused_block(p);
 				//init last data_header at end pool
 				data_header* p_last = cast_data_header(p, p->size & data_alignment_mask);
 				p_last->size = 0 | busy_bit;
+				link_unused_block(p);
 				return true;
 			};
 			inline uint32_t* get_first_unused_block_by_size(uint32_t size)
@@ -1036,7 +1036,6 @@ on_ok_16:
 				//---uint32_t *pu = &_pool_ptr->sli_table[sli];
 				//---assert(pu == get_first_unused_block_by_size(p->size));
 				//------------------
-				uint32_t *pu = get_first_unused_block_by_size(p->size);
 				if (p->prev_unused)
 				{
 					if (p->next_unused) cast_data_header_32bit(p, p->prev_unused)->next_unused += p->next_unused;
@@ -1049,12 +1048,13 @@ on_ok_16:
 				}
 				if (p->prev_unused == 0)
 				{
+					uint32_t *pu = get_first_unused_block_by_size(p->size);
 					if (p->next_unused) *pu = offs_data_header_32bit(_pool_ptr, cast_data_header_32bit(p, p->next_unused));
-					else *pu = 0;
-				}
-				if(*pu == 0)
-				{
-					_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31));
+					else
+					{
+						*pu = 0;
+						_pool_ptr->fli_table[(pu - _pool_ptr->sli_table) >> 5] &= ~(0x80000000UL >> ((pu - _pool_ptr->sli_table) & 31));
+					}
 				}
 			};
 			void link_unused_block(data_header* p)
@@ -1151,11 +1151,11 @@ on_ok_16:
 			size_t msize(void* ptr)
 			{//return capacity (greater than or equal to the size) of used data block, 0 otherwise
 				assert(_pool_ptr > 0 && "pointer must not be 0");
-#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size)) { return allocator::msize(ptr); }
-#else
+			#else
 				assert(ptr > _pool_ptr && ptr < cast_data_header(_pool_ptr, _pool_size) && "ptr must be in the pool");
-#endif
+			#endif
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				return (p->size & busy_bit) == busy_bit ? (p->size & data_alignment_mask) - data_header_size : 0;
 			};
@@ -1168,11 +1168,11 @@ on_ok_16:
 				if (size_aligned < data_header_bytes) size_aligned = data_header_bytes;
 				//find unused block
 				data_header* p = find_unused_block(size_aligned);
-#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
 				if (p == 0) { return allocator::malloc(size); }
-#else
+			#else
 				if (p == 0) { return 0; }
-#endif
+			#endif
 				//unlink unused block
 				unlink_unused_block(p);
 				//split unused block
@@ -1182,11 +1182,11 @@ on_ok_16:
 			void free(void* ptr)
 			{
 				assert(_pool_ptr > 0 && "pointer must not be 0");
-#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size)) { allocator::free(ptr); return; }
-#else
+			#else
 				assert(ptr > _pool_ptr && ptr < cast_data_header(_pool_ptr, _pool_size) && "ptr must be in the pool");
-#endif
+			#endif
 				data_header *p = cast_data_header(ptr, -int(data_header_offset));
 				
 				assert((p->size & busy_bit) == busy_bit && "memory block must be busy");
@@ -1222,11 +1222,11 @@ on_ok_16:
 
 				//allocate free memory block with an additional minimum block size bytes
 				void *ptr = malloc(size + data_header_bytes + align - 1);
-#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
 				if (ptr == 0) { return allocator::malloc_aligned(size, align); }
-#else
+			#else
 				if (ptr == 0) { return 0; }
-#endif				
+			#endif				
 				//align ptr
 				data_header *p = cast_data_header(ptr, -int(data_header_offset)), *p_new;			
 				size_t addr = (size_t)ptr + data_header_bytes + align - 1; addr -= addr % align; ptr = (void*)addr;
@@ -1241,11 +1241,11 @@ on_ok_16:
 			}
 			void* realloc(void* ptr, uint32_t size)
 			{
-#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
 				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size)) { return allocator::realloc(ptr, size); }
-#else
+			#else
 				assert(ptr > _pool_ptr && ptr < cast_data_header(_pool_ptr, _pool_size) && "ptr must be in the pool");
-#endif
+			#endif
 				//treated as malloc
 				if (ptr == 0) { return malloc(size); }
 				//treated as free
@@ -1297,9 +1297,9 @@ on_ok_16:
 				}
 				//force malloc new data block
 				ptr = malloc(required_size);
-#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
 				if (ptr == 0) { ptr = allocator::malloc(required_size); }
-#endif
+			#endif
 				if (ptr == 0) { return 0; }
 				//copy data to new place
 				::memcpy_s(ptr, required_size, cast_data_header(p, data_header_offset), cur_size - data_header_size);
@@ -1332,6 +1332,7 @@ on_ok_16:
 #undef cast_data_header_32bit
 #undef offs_data_header_32bit
 #undef split_block
+#undef USE_EXTERNAL_ALLOCATOR_ON_FAILURE
 
 #if 0
 		//firefox javascript scratchpad
