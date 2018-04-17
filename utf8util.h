@@ -938,6 +938,7 @@ on_ok_16:
 #define offs_data_header_32bit(p, p_to)  int32_t(reinterpret_cast<uint32_t*>(p_to) - reinterpret_cast<uint32_t*>(p))
 //use external allocator functions on failure
 #undef USE_EXTERNAL_ALLOCATOR_ON_FAILURE
+#undef USE_FTI_FIELD_IN_HEADER
 
 		struct data_header
 		{
@@ -945,9 +946,9 @@ on_ok_16:
 			uint32_t size;         //memory block size, 0 bit is busy_bit, 1 bit is prev_block_busy_bit
 			 int32_t next_unused;  //offset to next unused block     (if busy_bit == 0)
 			 int32_t prev_unused;  //offset to previous unused block (if busy_bit == 0)
-//------------------
-//---		uint32_t fti;          //fti value for size field        (if size > 16)
-//------------------
+#if defined(USE_FTI_FIELD_IN_HEADER)
+			uint32_t fti;          //fti value for size field        (if size > 16)
+#endif
 		};
 		struct page_header
 		{
@@ -1040,15 +1041,16 @@ on_ok_16:
 				}
 				if (p->prev_unused == 0)
 				{
-					//------------------
-					//---restore fti value
-					//---assert((data_header_bytes >> data_alignment_bits) <= fti_first_max);
-					//---uint32_t fti = (p->size >> data_alignment_bits) - data_header_bytes / data_alignment;
-					//---if (fti > (fti_first_max - data_header_bytes / data_alignment)) fti = p->fti;
-					//---uint32_t *pu = &_pool_ptr->fti_table[fti];
-					//---assert(pu == get_first_unused_block_by_size(p->size));
-					//------------------
+				#if defined(USE_FTI_FIELD_IN_HEADER)
+					//restore fti value
+					assert((data_header_bytes >> data_alignment_bits) <= fti_first_max);
+					uint32_t fti = (p->size >> data_alignment_bits) - data_header_bytes / data_alignment;
+					if (fti > (fti_first_max - data_header_bytes / data_alignment)) fti = p->fti;
+					uint32_t *pu = &_pool_ptr->fti_table[fti];
+					assert(pu == get_first_unused_block_by_size(p->size));
+				#else
 					uint32_t *pu = get_first_unused_block_by_size(p->size);
+				#endif
 					if (p->next_unused) *pu = offs_data_header_32bit(_pool_ptr, cast_data_header_32bit(p, p->next_unused));
 					else
 					{
@@ -1068,10 +1070,10 @@ on_ok_16:
 				p_next->prev = offs_data_header_32bit(p_next, p);
 				//link to list
 				uint32_t *pu = get_first_unused_block_by_size(p->size);
-				//------------------
-				//---store fti value
-				//---if ((p->size >> data_alignment_bits) > fti_first_max){ p->fti = offs_data_header_32bit(_pool_ptr->fti_table, pu); }
-				//------------------
+			#if defined(USE_FTI_FIELD_IN_HEADER)
+				//store fti value
+				if ((p->size >> data_alignment_bits) > fti_first_max){ p->fti = offs_data_header_32bit(_pool_ptr->fti_table, pu); }
+			#endif
 				if (*pu)
 				{
 					p->next_unused = offs_data_header_32bit(p, cast_data_header_32bit(_pool_ptr, *pu));
