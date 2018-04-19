@@ -1381,35 +1381,42 @@ on_ok_16:
 			uint32_t c1 = 0xCC9E2D51UL;
 			uint32_t c2 = 0x1B873593UL;
 			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)key;
+			const uint8_t* tail;
 
 			for (i = nblocks; i; --i)
 			{
 				k1 = *blocks++; k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2;
 				h1 ^= k1; h1 = (h1 << 13) | (h1 >> (32 - 13)); h1 = h1 * 5 + 0xE6546B64UL;
 			}
+			tail = (const uint8_t*)blocks;
 			k1 = 0;
 			switch (len & 3)
 			{
-				case 3: k1 ^= blocks[2] << 16;
-				case 2: k1 ^= blocks[1] << 8;
-				case 1: k1 ^= blocks[0];
-						k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+			case 3: k1 ^= tail[2] << 16;
+			case 2: k1 ^= tail[1] << 8;
+			case 1: k1 ^= tail[0];
+					k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
+			//finalization (for incremental h1 = seed)
 			h1 ^= len;
 			h1 ^= h1 >> 16; h1 *= 0x85EBCA6BUL; h1 ^= h1 >> 13; h1 *= 0xC2B2AE35UL; h1 ^= h1 >> 16;
 			*out = h1;
 		}
+		//test
+		//0, "111"   => 4084848948
+		//0, "hello" => 613153351
 
-		void MurmurHash3_x86_128(const void* key, const uint32_t len, const uint32_t seed, uint32_t* out)
+		void MurmurHash3_x86_128(const void* key, const uint32_t len, const uint32_t* seeds, uint32_t* out)
 		{
 			uint32_t i;
 			uint32_t k1, k2, k3, k4;
-			uint32_t h1 = seed, h2 = seed, h3 = seed, h4 = seed;
+			uint32_t h1 = seeds[0], h2 = seeds[1], h3 = seeds[2], h4 = seeds[3];
 			uint32_t c1 = 0x239B961BUL;
 			uint32_t c2 = 0xAB0E9789UL;
 			uint32_t c3 = 0x38B34AE5UL;
 			uint32_t c4 = 0xA1E38B93UL;
 			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)key;
+			const uint8_t* tail;
 
 			for (i = nblocks; i; --i)
 			{
@@ -1423,29 +1430,31 @@ on_ok_16:
 				k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
 				h4 = (h4 << 13) | (h4 >> (32 - 13)); h4 += h1; h4 = h4 * 5 + 0x32AC3B17UL;
 			}
+			tail = (const uint8_t*)blocks;
 			k1 = 0; k2 = 0; k3 = 0; k4 = 0;
 			switch (len & 15)
 			{
-				case 15: k4 ^= blocks[14] << 16;
-				case 14: k4 ^= blocks[13] << 8;
-				case 13: k4 ^= blocks[12] << 0;
-						 k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
-				case 12: k3 ^= blocks[11] << 24;
-				case 11: k3 ^= blocks[10] << 16;
-				case 10: k3 ^= blocks[9] << 8;
-				case  9: k3 ^= blocks[8] << 0;
-						 k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
-				case  8: k2 ^= blocks[7] << 24;
-				case  7: k2 ^= blocks[6] << 16;
-				case  6: k2 ^= blocks[5] << 8;
-				case  5: k2 ^= blocks[4] << 0;
-						 k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
-				case  4: k1 ^= blocks[3] << 24;
-				case  3: k1 ^= blocks[2] << 16;
-				case  2: k1 ^= blocks[1] << 8;
-				case  1: k1 ^= blocks[0] << 0;
-						 k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+			case 15: k4 ^= uint32_t(tail[14]) << 16;
+			case 14: k4 ^= uint32_t(tail[13]) << 8;
+			case 13: k4 ^= uint32_t(tail[12]) << 0;
+					 k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
+			case 12: k3 ^= uint32_t(tail[11]) << 24;
+			case 11: k3 ^= uint32_t(tail[10]) << 16;
+			case 10: k3 ^= uint32_t(tail[9]) << 8;
+			case  9: k3 ^= uint32_t(tail[8]) << 0;
+					 k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
+			case  8: k2 ^= uint32_t(tail[7]) << 24;
+			case  7: k2 ^= uint32_t(tail[6]) << 16;
+			case  6: k2 ^= uint32_t(tail[5]) << 8;
+			case  5: k2 ^= uint32_t(tail[4]) << 0;
+					 k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
+			case  4: k1 ^= uint32_t(tail[3]) << 24;
+			case  3: k1 ^= uint32_t(tail[2]) << 16;
+			case  2: k1 ^= uint32_t(tail[1]) << 8;
+			case  1: k1 ^= uint32_t(tail[0]) << 0;
+					 k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
+			//finalization (for incremental h[i] = seeds[i])
 			h1 ^= len; h2 ^= len; h3 ^= len; h4 ^= len;
 			h1 += h2; h1 += h3; h1 += h4;
 			h2 += h1; h3 += h1; h4 += h1;
@@ -1467,6 +1476,7 @@ on_ok_16:
 			uint64_t c2 = 0x4CF5AD432745937FULL;
 			const uint32_t nblocks = len >> 4;
 			const uint64_t *blocks = (const uint64_t*)key;
+			const uint8_t* tail;
 
 			for (i = nblocks; i; --i)
 			{
@@ -1476,27 +1486,29 @@ on_ok_16:
 				k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
 				h2 = (h2 << 31) | (h2 >> (64 - 31)); h2 += h1; h2 = h2 * 5 + 0x38495AB5ULL;
 			}
+			tail = (const uint8_t*)blocks;
 			k1 = 0; k2 = 0;
 			switch (len & 15)
 			{
-				case 15: k2 ^= blocks[14] << 48;
-				case 14: k2 ^= blocks[13] << 40;
-				case 13: k2 ^= blocks[12] << 32;
-				case 12: k2 ^= blocks[11] << 24;
-				case 11: k2 ^= blocks[10] << 16;
-				case 10: k2 ^= blocks[9] << 8;
-				case  9: k2 ^= blocks[8] << 0;
-						 k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
-				case  8: k1 ^= blocks[7] << 56;
-				case  7: k1 ^= blocks[6] << 48;
-				case  6: k1 ^= blocks[5] << 40;
-				case  5: k1 ^= blocks[4] << 32;
-				case  4: k1 ^= blocks[3] << 24;
-				case  3: k1 ^= blocks[2] << 16;
-				case  2: k1 ^= blocks[1] << 8;
-				case  1: k1 ^= blocks[0] << 0;
-						 k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
+			case 15: k2 ^= uint64_t(tail[14]) << 48;
+			case 14: k2 ^= uint64_t(tail[13]) << 40;
+			case 13: k2 ^= uint64_t(tail[12]) << 32;
+			case 12: k2 ^= uint64_t(tail[11]) << 24;
+			case 11: k2 ^= uint64_t(tail[10]) << 16;
+			case 10: k2 ^= uint64_t(tail[9]) << 8;
+			case  9: k2 ^= uint64_t(tail[8]) << 0;
+					 k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
+			case  8: k1 ^= uint64_t(tail[7]) << 56;
+			case  7: k1 ^= uint64_t(tail[6]) << 48;
+			case  6: k1 ^= uint64_t(tail[5]) << 40;
+			case  5: k1 ^= uint64_t(tail[4]) << 32;
+			case  4: k1 ^= uint64_t(tail[3]) << 24;
+			case  3: k1 ^= uint64_t(tail[2]) << 16;
+			case  2: k1 ^= uint64_t(tail[1]) << 8;
+			case  1: k1 ^= uint64_t(tail[0]) << 0;
+					 k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
 			};
+			//finalization (for incremental h1 = h2 = seed)
 			h1 ^= len; h2 ^= len;
 			h1 += h2; h2 += h1;
 			h1 ^= h1 >> 33; h1 *= 0xFF51AFD7ED558CCDULL; h1 ^= h1 >> 33; h1 *= 0xC4CEB9FE1A85EC53ULL; h1 ^= h1 >> 33;
@@ -1504,6 +1516,9 @@ on_ok_16:
 			h1 += h2; h2 += h1;
 			out[0] = h1; out[1] = h2;
 		}
+		//test
+		//0, "hell"  => 0x629942693e10f867L, 0x92db0b82baeb5347L
+		//1, "hello" => 0xa78ddff5adae8d10L, 0x128900ef20900135L
 
 	}//end namespace memory
 }//end namespace LZ - lazy
