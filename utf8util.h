@@ -1392,9 +1392,9 @@ on_ok_16:
 			k1 = 0;
 			switch (len & 3)
 			{
-			case 3: k1 ^= tail[2] << 16;
-			case 2: k1 ^= tail[1] << 8;
-			case 1: k1 ^= tail[0];
+			case 3: k1 ^= uint32_t(tail[2]) << 16;
+			case 2: k1 ^= uint32_t(tail[1]) << 8;
+			case 1: k1 ^= uint32_t(tail[0]);
 					k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
 			//finalization (for incremental h1 = seed)
