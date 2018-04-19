@@ -927,7 +927,7 @@ on_ok_16:
 #define default_pool_size    0x40000UL
 #define busy_bit             1
 #define prev_busy_bit        2
-#define fti_bits             5
+#define fti_bits             3
 #define fti_first_max        (1UL<<(fti_bits + 1))
 #define fti_table_n          (((32 - data_alignment_bits - fti_bits + 1) << fti_bits) - (data_header_bytes / data_alignment))
 #define sti_table_n          ((fti_table_n + 31)/32)
@@ -947,7 +947,7 @@ on_ok_16:
 			 int32_t next_unused;  //offset to next unused block     (if busy_bit == 0)
 			 int32_t prev_unused;  //offset to previous unused block (if busy_bit == 0)
 #if defined(USE_FTI_FIELD_IN_HEADER)
-			uint32_t fti;          //fti value for size field        (if size > 16)
+			uint32_t fti;          //fti value for size field        (if size > data_header_bytes)
 #endif
 		};
 		struct page_header
@@ -1044,8 +1044,8 @@ on_ok_16:
 				#if defined(USE_FTI_FIELD_IN_HEADER)
 					//restore fti value
 					assert((data_header_bytes >> data_alignment_bits) <= fti_first_max);
-					uint32_t fti = (p->size >> data_alignment_bits) - data_header_bytes / data_alignment;
-					if (fti > (fti_first_max - data_header_bytes / data_alignment)) fti = p->fti;
+					uint32_t fti = (p->size >> data_alignment_bits);
+					if (fti > fti_first_max) fti = p->fti; else fti -= data_header_bytes / data_alignment;
 					uint32_t *pu = &_pool_ptr->fti_table[fti];
 					assert(pu == get_first_unused_block_by_size(p->size));
 				#else
@@ -1087,7 +1087,7 @@ on_ok_16:
 				data_header *p = 0;
 				uint32_t
 					*pu = get_first_unused_block_by_size(size),
-					m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->fti_table) & 31),
+					 m = 0xFFFFFFFFUL >> ((pu - _pool_ptr->fti_table) & 31),
 					*pbit = &_pool_ptr->sti_table[(pu - _pool_ptr->fti_table) >> 5],
 					*pbit_end = &_pool_ptr->sti_table[sti_table_n];
 				while (1)
@@ -1103,7 +1103,7 @@ on_ok_16:
 						}
 						register union { double d; int32_t i[2]; }v = { (double)m };
 						m = 31 + 1023 - (v.i[1] >> 20);
-						pu = _pool_ptr->fti_table + (m + ((pbit - _pool_ptr->sti_table) << 5));
+						pu = &_pool_ptr->fti_table[m + ((pbit - _pool_ptr->sti_table) << 5)];
 						m++; m = (m < 32) ? 0xFFFFFFFFUL >> m : 0;//shr workaround for 5 bit mask
 						p = cast_data_header_32bit(_pool_ptr, *pu);
 
@@ -1335,6 +1335,7 @@ on_ok_16:
 #undef offs_data_header_32bit
 #undef split_block
 #undef USE_EXTERNAL_ALLOCATOR_ON_FAILURE
+#undef USE_FTI_FIELD_IN_HEADER
 
 #if 0
 		//firefox javascript scratchpad
@@ -1357,6 +1358,155 @@ on_ok_16:
 		console.log(f(Math.pow(2, 33)));//2^33 =  8 GB, sli_table_n = 860
 		console.log(f(Math.pow(2, 34)));//2^34 = 16 GB, sli_table_n = 892
 #endif
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		void MurmurHash3_x86_32(const void* key, const uint32_t len, const uint32_t seed, uint32_t* out)
+		{
+			uint32_t i;
+			uint32_t k1;
+			uint32_t h1 = seed;
+			uint32_t c1 = 0xCC9E2D51UL;
+			uint32_t c2 = 0x1B873593UL;
+			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)key;
+
+			for (i = nblocks; i; --i)
+			{
+				k1 = *blocks++; k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2;
+				h1 ^= k1; h1 = (h1 << 13) | (h1 >> (32 - 13)); h1 = h1 * 5 + 0xE6546B64UL;
+			}
+			k1 = 0;
+			switch (len & 3)
+			{
+				case 3: k1 ^= blocks[2] << 16;
+				case 2: k1 ^= blocks[1] << 8;
+				case 1: k1 ^= blocks[0];
+						k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+			};
+			h1 ^= len;
+			h1 ^= h1 >> 16; h1 *= 0x85EBCA6BUL; h1 ^= h1 >> 13; h1 *= 0xC2B2AE35UL; h1 ^= h1 >> 16;
+			*out = h1;
+		}
+
+		void MurmurHash3_x86_128(const void* key, const uint32_t len, const uint32_t seed, uint32_t* out)
+		{
+			uint32_t i;
+			uint32_t k1, k2, k3, k4;
+			uint32_t h1 = seed, h2 = seed, h3 = seed, h4 = seed;
+			uint32_t c1 = 0x239B961BUL;
+			uint32_t c2 = 0xAB0E9789UL;
+			uint32_t c3 = 0x38B34AE5UL;
+			uint32_t c4 = 0xA1E38B93UL;
+			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)key;
+
+			for (i = nblocks; i; --i)
+			{
+				k1 = *blocks++; k2 = *blocks++; k3 = *blocks++; k4 = *blocks++;
+				k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+				h1 = (h1 << 19) | (h1 >> (32 - 19)); h1 += h2; h1 = h1 * 5 + 0x561CCD1BUL;
+				k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
+				h2 = (h2 << 17) | (h2 >> (32 - 17)); h2 += h3; h2 = h2 * 5 + 0x0BCAA747UL;
+				k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
+				h3 = (h3 << 15) | (h3 >> (32 - 15)); h3 += h4; h3 = h3 * 5 + 0x96CD1C35UL;
+				k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
+				h4 = (h4 << 13) | (h4 >> (32 - 13)); h4 += h1; h4 = h4 * 5 + 0x32AC3B17UL;
+			}
+			k1 = 0; k2 = 0; k3 = 0; k4 = 0;
+			switch (len & 15)
+			{
+				case 15: k4 ^= blocks[14] << 16;
+				case 14: k4 ^= blocks[13] << 8;
+				case 13: k4 ^= blocks[12] << 0;
+						 k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
+
+				case 12: k3 ^= blocks[11] << 24;
+				case 11: k3 ^= blocks[10] << 16;
+				case 10: k3 ^= blocks[9] << 8;
+				case  9: k3 ^= blocks[8] << 0;
+						 k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
+
+				case  8: k2 ^= blocks[7] << 24;
+				case  7: k2 ^= blocks[6] << 16;
+				case  6: k2 ^= blocks[5] << 8;
+				case  5: k2 ^= blocks[4] << 0;
+						 k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
+
+				case  4: k1 ^= blocks[3] << 24;
+				case  3: k1 ^= blocks[2] << 16;
+				case  2: k1 ^= blocks[1] << 8;
+				case  1: k1 ^= blocks[0] << 0;
+						 k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+			};
+			h1 ^= len; h2 ^= len; h3 ^= len; h4 ^= len;
+			h1 += h2; h1 += h3; h1 += h4;
+			h2 += h1; h3 += h1; h4 += h1;
+			h1 ^= h1 >> 16; h1 *= 0x85EBCA6BUL; h1 ^= h1 >> 13; h1 *= 0xC2B2AE35UL; h1 ^= h1 >> 16;
+			h2 ^= h2 >> 16; h2 *= 0x85EBCA6BUL; h2 ^= h2 >> 13; h2 *= 0xC2B2AE35UL; h2 ^= h2 >> 16;
+			h3 ^= h3 >> 16; h3 *= 0x85EBCA6BUL; h3 ^= h3 >> 13; h3 *= 0xC2B2AE35UL; h3 ^= h3 >> 16;
+			h4 ^= h4 >> 16; h4 *= 0x85EBCA6BUL; h4 ^= h4 >> 13; h4 *= 0xC2B2AE35UL; h4 ^= h4 >> 16;
+			h1 += h2; h1 += h3; h1 += h4;
+			h2 += h1; h3 += h1; h4 += h1;
+			out[0] = h1; out[1] = h2; out[2] = h3; out[3] = h4;
+		}
+
+		void MurmurHash3_x64_128(const void* key, const uint32_t len, const uint32_t seed, uint64_t* out)
+		{
+			uint32_t i;
+			uint64_t k1, k2;
+			uint64_t h1 = seed, h2 = seed;
+			uint64_t c1 = 0x87C37B91114253D5ULL;
+			uint64_t c2 = 0x4CF5AD432745937FULL;
+			const uint32_t nblocks = len >> 4;
+			const uint64_t *blocks = (const uint64_t*)key;
+
+			for (i = nblocks; i; --i)
+			{
+				k1 = *blocks++; k2 = *blocks++;
+				k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
+				h1 = (h1 << 27) | (h1 >> (64 - 27)); h1 += h2; h1 = h1 * 5 + 0x52DCE729ULL;
+				k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
+				h2 = (h2 << 31) | (h2 >> (64 - 31)); h2 += h1; h2 = h2 * 5 + 0x38495AB5ULL;
+			}
+			k1 = 0; k2 = 0;
+			switch (len & 15)
+			{
+				case 15: k2 ^= blocks[14] << 48;
+				case 14: k2 ^= blocks[13] << 40;
+				case 13: k2 ^= blocks[12] << 32;
+				case 12: k2 ^= blocks[11] << 24;
+				case 11: k2 ^= blocks[10] << 16;
+				case 10: k2 ^= blocks[9] << 8;
+				case  9: k2 ^= blocks[8] << 0;
+						 k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
+				case  8: k1 ^= blocks[7] << 56;
+				case  7: k1 ^= blocks[6] << 48;
+				case  6: k1 ^= blocks[5] << 40;
+				case  5: k1 ^= blocks[4] << 32;
+				case  4: k1 ^= blocks[3] << 24;
+				case  3: k1 ^= blocks[2] << 16;
+				case  2: k1 ^= blocks[1] << 8;
+				case  1: k1 ^= blocks[0] << 0;
+						 k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
+			};
+			h1 ^= len; h2 ^= len;
+			h1 += h2; h2 += h1;
+			h1 ^= h1 >> 33; h1 *= 0xFF51AFD7ED558CCDULL; h1 ^= h1 >> 33; h1 *= 0xc4CEB9FE1A85EC53ULL; h1 ^= h1 >> 33;
+			h2 ^= h2 >> 33; h2 *= 0xFF51AFD7ED558CCDULL; h2 ^= h2 >> 33; h2 *= 0xc4CEB9FE1A85EC53ULL; h2 ^= h2 >> 33;
+			h1 += h2; h2 += h1;
+			out[0] = h1; out[1] = h2;
+		}
 
 	}//end namespace memory
 }//end namespace LZ - lazy
