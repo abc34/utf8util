@@ -1430,19 +1430,16 @@ on_ok_16:
 				case 14: k4 ^= blocks[13] << 8;
 				case 13: k4 ^= blocks[12] << 0;
 						 k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
-
 				case 12: k3 ^= blocks[11] << 24;
 				case 11: k3 ^= blocks[10] << 16;
 				case 10: k3 ^= blocks[9] << 8;
 				case  9: k3 ^= blocks[8] << 0;
 						 k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
-
 				case  8: k2 ^= blocks[7] << 24;
 				case  7: k2 ^= blocks[6] << 16;
 				case  6: k2 ^= blocks[5] << 8;
 				case  5: k2 ^= blocks[4] << 0;
 						 k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
-
 				case  4: k1 ^= blocks[3] << 24;
 				case  3: k1 ^= blocks[2] << 16;
 				case  2: k1 ^= blocks[1] << 8;
@@ -1502,8 +1499,8 @@ on_ok_16:
 			};
 			h1 ^= len; h2 ^= len;
 			h1 += h2; h2 += h1;
-			h1 ^= h1 >> 33; h1 *= 0xFF51AFD7ED558CCDULL; h1 ^= h1 >> 33; h1 *= 0xc4CEB9FE1A85EC53ULL; h1 ^= h1 >> 33;
-			h2 ^= h2 >> 33; h2 *= 0xFF51AFD7ED558CCDULL; h2 ^= h2 >> 33; h2 *= 0xc4CEB9FE1A85EC53ULL; h2 ^= h2 >> 33;
+			h1 ^= h1 >> 33; h1 *= 0xFF51AFD7ED558CCDULL; h1 ^= h1 >> 33; h1 *= 0xC4CEB9FE1A85EC53ULL; h1 ^= h1 >> 33;
+			h2 ^= h2 >> 33; h2 *= 0xFF51AFD7ED558CCDULL; h2 ^= h2 >> 33; h2 *= 0xC4CEB9FE1A85EC53ULL; h2 ^= h2 >> 33;
 			h1 += h2; h2 += h1;
 			out[0] = h1; out[1] = h2;
 		}
