@@ -1531,7 +1531,7 @@ on_ok_16:
 
 
 
-		//SipHash a fast short-input pseudorandom function family with a 128-bit key and 64-bit output.
+		//SipHash a fast short-input pseudorandom function family with a 128-bit key and 64 or 128-bit output.
 		//SipHash-2-4 for best performance,
 		//SipHash-4-8 for conservative security.
 		//Source:	https://github.com/veorq/SipHash
@@ -1551,60 +1551,105 @@ on_ok_16:
 		HALF_ROUND(v2,v1,v0,v3,17,21);	\
 
 		// siphash-2-4, 128 bit key, 64 bit output
-		uint64_t siphash24(const void *src, uint32_t len, const uint64_t key[2])
+		uint64_t siphash24_64(const void *src, uint32_t len, const uint64_t key[2])
 		{
 			uint64_t
 				t,
 				k0 = key[0], k1 = key[1],
-				b = ((uint64_t)len) << 56,
+				b = ((uint64_t)(len & 0xFF)) << 56,
 				v0 = k0 ^ 0x736F6D6570736575ULL,
 				v1 = k1 ^ 0x646F72616E646F6DULL,
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
 
-			//v1 ^= 0xEE; //insert for 128 bit siphash
-
-			const uint64_t *in = (uint64_t*)src;
-			while (len >= 8)
+			uint64_t *in = (uint64_t*)src;
+			for (;len >= 8;len -= 8)
 			{
-				t = *in++; len -= 8;
+				t = *in++;
 				v3 ^= t;
 				//c rounds
 				DOUBLE_ROUND(v0, v1, v2, v3);
 				v0 ^= t;
 			}
-			t = 0; uint8_t *pt = (uint8_t*)&t; uint8_t *m = (uint8_t*)in;
+			t = 0; uint8_t *m = (uint8_t*)in;
 			switch (len)
 			{
-			case 7: pt[6] = m[6];
-			case 6: pt[5] = m[5];
-			case 5: pt[4] = m[4];
-			case 4: *((uint32_t*)&pt[0]) = *((uint32_t*)&m[0]); break;
-			case 3: pt[2] = m[2];
-			case 2: pt[1] = m[1];
-			case 1: pt[0] = m[0];
+			case 7: t |= (uint64_t)m[6] << 48;
+			case 6: t |= (uint64_t)m[5] << 40;
+			case 5: t |= (uint64_t)m[4] << 32;
+			case 4: t |= (uint64_t)m[3] << 24;
+			case 3: t |= (uint64_t)m[2] << 16;
+			case 2: t |= (uint64_t)m[1] << 8;
+			case 1: t |= (uint64_t)m[0];
 			}
-			b |= t;
-			v3 ^= b;
+			t |= b;
+			v3 ^= t;
 			//c rounds
 			DOUBLE_ROUND(v0, v1, v2, v3);
-			v0 ^= b;
-			v2 ^= 0xFF;//or v2 ^= 0xEE; //for 128 bit siphash
+			v0 ^= t;
+			v2 ^= 0xFF;
 			//d rounds
 			DOUBLE_ROUND(v0, v1, v2, v3);
 			DOUBLE_ROUND(v0, v1, v2, v3);
 			return v0 ^ v1 ^ v2 ^ v3;
-			//out[0] = v0 ^ v1 ^ v2 ^ v3; //store first 64 bit for 128 siphash
-			//v1 ^= 0xDD;
-			//d rounds
-			//DOUBLE_ROUND(v0, v1, v2, v3);
-			//DOUBLE_ROUND(v0, v1, v2, v3);
-			//out[1] = v0 ^ v1 ^ v2 ^ v3; //store second 64 bit for 128 siphash
-			//return;
 		}
 		//test
 		//key = "1234567812345678",                      "hello world!" => 0x53bedbebc8d5bb58
 		//key = {0x0706050403020100,0x0f0e0d0c0b0a0908}, "hello world!" => 0x83b187ce51e5332d
+
+		// siphash-2-4, 128 bit key, 128 bit output
+		void siphash24_128(const void *src, uint32_t len, const uint64_t key[2], uint64_t out[2])
+		{
+			uint64_t
+				t,
+				k0 = key[0], k1 = key[1],
+				b = ((uint64_t)(len & 0xFF)) << 56,
+				v0 = k0 ^ 0x736F6D6570736575ULL,
+				v1 = k1 ^ 0x646F72616E646F6DULL,
+				v2 = k0 ^ 0x6C7967656E657261ULL,
+				v3 = k1 ^ 0x7465646279746573ULL;
+
+			v1 ^= 0xEE; //(128 siphash)
+
+			uint64_t *in = (uint64_t*)src;
+			for (;len >= 8;len -= 8)
+			{
+				t = *in++;
+				v3 ^= t;
+				//c rounds
+				DOUBLE_ROUND(v0, v1, v2, v3);
+				v0 ^= t;
+			}
+			t = 0; uint8_t *m = (uint8_t*)in;
+			switch (len)
+			{
+			case 7: t |= (uint64_t)m[6] << 48;
+			case 6: t |= (uint64_t)m[5] << 40;
+			case 5: t |= (uint64_t)m[4] << 32;
+			case 4: t |= (uint64_t)m[3] << 24;
+			case 3: t |= (uint64_t)m[2] << 16;
+			case 2: t |= (uint64_t)m[1] << 8;
+			case 1: t |= (uint64_t)m[0];
+			}
+			t |= b;
+			v3 ^= t;
+			//c rounds
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			v0 ^= t;
+			v2 ^= 0xEE;//(128 siphash)
+			//d rounds
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			out[0] = v0 ^ v1 ^ v2 ^ v3; //store first 64 bit (128 siphash)
+			v1 ^= 0xDD;
+			//d rounds
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			out[1] = v0 ^ v1 ^ v2 ^ v3; //store second 64 bit (128 siphash)
+		}
+		//test
+		//key = {0x0706050403020100,0x0f0e0d0c0b0a0908}, "hello world!" => {0x0357d28cd7973d91, 0x4457c7c13ac02a00}
+
 #undef HALF_ROUND
 #undef DOUBLE_ROUND
 
