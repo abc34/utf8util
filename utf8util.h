@@ -1402,15 +1402,16 @@ on_ok_16:
 			h1 ^= h1 >> 16; h1 *= 0x85EBCA6BUL; h1 ^= h1 >> 13; h1 *= 0xC2B2AE35UL; h1 ^= h1 >> 16;
 			*out = h1;
 		}
-		//test
+		//test http://murmurhash.shorelabs.com/
 		//0, "111"   => 4084848948
 		//0, "hello" => 613153351
+		//12,"hello world!" => 3336548647
 
-		void MurmurHash3_x86_128(const void* key, const uint32_t len, const uint32_t* seeds, uint32_t* out)
+		void MurmurHash3_x86_128(const void* key, const uint32_t len, const uint32_t seed, uint32_t* out)
 		{
 			uint32_t i;
 			uint32_t k1, k2, k3, k4;
-			uint32_t h1 = seeds[0], h2 = seeds[1], h3 = seeds[2], h4 = seeds[3];
+			uint32_t h1 = seed, h2 = seed, h3 = seed, h4 = seed;
 			uint32_t c1 = 0x239B961BUL;
 			uint32_t c2 = 0xAB0E9789UL;
 			uint32_t c3 = 0x38B34AE5UL;
@@ -1454,7 +1455,7 @@ on_ok_16:
 			case  1: k1 ^= uint32_t(tail[0]) << 0;
 					 k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
-			//finalization (for incremental h[i] = seeds[i])
+			//finalization (for incremental h[i] = seed)
 			h1 ^= len; h2 ^= len; h3 ^= len; h4 ^= len;
 			h1 += h2; h1 += h3; h1 += h4;
 			h2 += h1; h3 += h1; h4 += h1;
@@ -1466,6 +1467,8 @@ on_ok_16:
 			h2 += h1; h3 += h1; h4 += h1;
 			out[0] = h1; out[1] = h2; out[2] = h3; out[3] = h4;
 		}
+		//test http://murmurhash.shorelabs.com/
+		//12, "hello world!" => {0x74a452de3b195a0c, 0x4fc6b5bc134d03e6}
 
 		void MurmurHash3_x64_128(const void* key, const uint32_t len, const uint32_t seed, uint64_t* out)
 		{
@@ -1516,9 +1519,8 @@ on_ok_16:
 			h1 += h2; h2 += h1;
 			out[0] = h1; out[1] = h2;
 		}
-		//test
-		//0, "hell"  => 0x629942693e10f867L, 0x92db0b82baeb5347L
-		//1, "hello" => 0xa78ddff5adae8d10L, 0x128900ef20900135L
-
+		//test http://murmurhash.shorelabs.com/
+		//1,  "hello"        => {0xa78ddff5adae8d10, 0x128900ef20900135}
+		//12, "hello world!" => {0xb267716273247be7, 0xcf7c7a126687dac0}
 	}//end namespace memory
 }//end namespace LZ - lazy
