@@ -1397,7 +1397,7 @@ on_ok_16:
 			case 1: k1 ^= uint32_t(tail[0]);
 					k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
-			//finalization (for incremental h1 = seed)
+			//finalization (for incremental update h1 = seed)
 			h1 ^= len;
 			h1 ^= h1 >> 16; h1 *= 0x85EBCA6BUL; h1 ^= h1 >> 13; h1 *= 0xC2B2AE35UL; h1 ^= h1 >> 16;
 			*out = h1;
@@ -1455,7 +1455,7 @@ on_ok_16:
 			case  1: k1 ^= uint32_t(tail[0]) << 0;
 					 k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
-			//finalization (for incremental h[i] = seed)
+			//finalization (for incremental update h1 = h2 = h3 = h4 = seed)
 			h1 ^= len; h2 ^= len; h3 ^= len; h4 ^= len;
 			h1 += h2; h1 += h3; h1 += h4;
 			h2 += h1; h3 += h1; h4 += h1;
@@ -1511,7 +1511,7 @@ on_ok_16:
 			case  1: k1 ^= uint64_t(tail[0]) << 0;
 					 k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
 			};
-			//finalization (for incremental h1 = h2 = seed)
+			//finalization (for incremental update h1 = h2 = seed)
 			h1 ^= len; h2 ^= len;
 			h1 += h2; h2 += h1;
 			h1 ^= h1 >> 33; h1 *= 0xFF51AFD7ED558CCDULL; h1 ^= h1 >> 33; h1 *= 0xC4CEB9FE1A85EC53ULL; h1 ^= h1 >> 33;
