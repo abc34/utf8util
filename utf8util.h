@@ -1373,14 +1373,14 @@ on_ok_16:
 
 
 
-		void MurmurHash3_x86_32(const void* key, const uint32_t len, const uint32_t seed, uint32_t* out)
+		void MurmurHash3_x86_32(const void* src, const uint32_t len, const uint32_t seed, uint32_t* out)
 		{
 			uint32_t i;
 			uint32_t k1;
 			uint32_t h1 = seed;
 			uint32_t c1 = 0xCC9E2D51UL;
 			uint32_t c2 = 0x1B873593UL;
-			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)key;
+			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)src;
 			const uint8_t* tail;
 
 			for (i = nblocks; i; --i)
@@ -1407,7 +1407,7 @@ on_ok_16:
 		//0, "hello" => 613153351
 		//12,"hello world!" => 3336548647
 
-		void MurmurHash3_x86_128(const void* key, const uint32_t len, const uint32_t seed, uint32_t* out)
+		void MurmurHash3_x86_128(const void* src, const uint32_t len, const uint32_t seed, uint32_t* out)
 		{
 			uint32_t i;
 			uint32_t k1, k2, k3, k4;
@@ -1416,7 +1416,7 @@ on_ok_16:
 			uint32_t c2 = 0xAB0E9789UL;
 			uint32_t c3 = 0x38B34AE5UL;
 			uint32_t c4 = 0xA1E38B93UL;
-			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)key;
+			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)src;
 			const uint8_t* tail;
 
 			for (i = nblocks; i; --i)
@@ -1470,7 +1470,7 @@ on_ok_16:
 		//test http://murmurhash.shorelabs.com/
 		//12, "hello world!" => {0x74a452de3b195a0c, 0x4fc6b5bc134d03e6}
 
-		void MurmurHash3_x64_128(const void* key, const uint32_t len, const uint32_t seed, uint64_t* out)
+		void MurmurHash3_x64_128(const void* src, const uint32_t len, const uint32_t seed, uint64_t* out)
 		{
 			uint32_t i;
 			uint64_t k1, k2;
@@ -1478,7 +1478,7 @@ on_ok_16:
 			uint64_t c1 = 0x87C37B91114253D5ULL;
 			uint64_t c2 = 0x4CF5AD432745937FULL;
 			const uint32_t nblocks = len >> 4;
-			const uint64_t *blocks = (const uint64_t*)key;
+			const uint64_t *blocks = (const uint64_t*)src;
 			const uint8_t* tail;
 
 			for (i = nblocks; i; --i)
@@ -1522,5 +1522,100 @@ on_ok_16:
 		//test http://murmurhash.shorelabs.com/
 		//1,  "hello"        => {0xa78ddff5adae8d10, 0x128900ef20900135}
 		//12, "hello world!" => {0xb267716273247be7, 0xcf7c7a126687dac0}
+
+
+
+
+
+
+
+
+
+		//SipHash a fast short-input pseudorandom function family with a 128-bit key and 64-bit output.
+		//SipHash-2-4 for best performance,
+		//SipHash-4-8 for conservative security.
+		//Source:	https://github.com/veorq/SipHash
+		//			https://github.com/majek/csiphash/blob/master/csiphash.c
+
+#define HALF_ROUND(a,b,c,d,s,t)	\
+		a += b; c += d;	\
+		b = ((b << s) | (b >> (64 - s))) ^ a; \
+		d = ((d << t) | (d >> (64 - t))) ^ c; \
+		a = (a << 32) | (a >> (64 - 32));
+#define DOUBLE_ROUND(v0,v1,v2,v3)	\
+		/* sipround 1 */ \
+		HALF_ROUND(v0,v1,v2,v3,13,16);	\
+		HALF_ROUND(v2,v1,v0,v3,17,21);	\
+		/* sipround 2 */ \
+		HALF_ROUND(v0,v1,v2,v3,13,16);	\
+		HALF_ROUND(v2,v1,v0,v3,17,21);	\
+
+		// siphash-2-4, 128 bit key, 64 bit output
+		uint64_t siphash24(const void *src, uint32_t len, const uint64_t key[2])
+		{
+			uint64_t
+				t,
+				k0 = key[0], k1 = key[1],
+				b = ((uint64_t)len) << 56,
+				v0 = k0 ^ 0x736F6D6570736575ULL,
+				v1 = k1 ^ 0x646F72616E646F6DULL,
+				v2 = k0 ^ 0x6C7967656E657261ULL,
+				v3 = k1 ^ 0x7465646279746573ULL;
+
+			//v1 ^= 0xEE; //insert for 128 bit siphash
+
+			const uint64_t *in = (uint64_t*)src;
+			while (len >= 8)
+			{
+				t = *in++; len -= 8;
+				v3 ^= t;
+				//c rounds
+				DOUBLE_ROUND(v0, v1, v2, v3);
+				v0 ^= t;
+			}
+			t = 0; uint8_t *pt = (uint8_t*)&t; uint8_t *m = (uint8_t*)in;
+			switch (len)
+			{
+			case 7: pt[6] = m[6];
+			case 6: pt[5] = m[5];
+			case 5: pt[4] = m[4];
+			case 4: *((uint32_t*)&pt[0]) = *((uint32_t*)&m[0]); break;
+			case 3: pt[2] = m[2];
+			case 2: pt[1] = m[1];
+			case 1: pt[0] = m[0];
+			}
+			b |= t;
+			v3 ^= b;
+			//c rounds
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			v0 ^= b;
+			v2 ^= 0xFF;//or v2 ^= 0xEE; //for 128 bit siphash
+			//d rounds
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			DOUBLE_ROUND(v0, v1, v2, v3);
+			return v0 ^ v1 ^ v2 ^ v3;
+			//out[0] = v0 ^ v1 ^ v2 ^ v3; //store first 64 bit for 128 siphash
+			//v1 ^= 0xDD;
+			//d rounds
+			//DOUBLE_ROUND(v0, v1, v2, v3);
+			//DOUBLE_ROUND(v0, v1, v2, v3);
+			//out[1] = v0 ^ v1 ^ v2 ^ v3; //store second 64 bit for 128 siphash
+			//return;
+		}
+		//test
+		//key = "1234567812345678",                      "hello world!" => 0x53bedbebc8d5bb58
+		//key = {0x0706050403020100,0x0f0e0d0c0b0a0908}, "hello world!" => 0x83b187ce51e5332d
+#undef HALF_ROUND
+#undef DOUBLE_ROUND
+
+
+
+
+
+
+
+
+
+
 	}//end namespace memory
 }//end namespace LZ - lazy
