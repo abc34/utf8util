@@ -1383,7 +1383,7 @@ on_ok_16:
 			const uint8_t* tail;
 			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)src;
 
-			assert((size_t(src) & 31) == 0 && "src must be aligned to 32 bit");
+			assert((size_t(src) & 3) == 0 && "src must be aligned to 32 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1421,7 +1421,7 @@ on_ok_16:
 			const uint8_t* tail;
 			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)src;
 
-			assert((size_t(src) & 31) == 0 && "src must be aligned to 32 bit");
+			assert((size_t(src) & 3) == 0 && "src must be aligned to 32 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1485,7 +1485,7 @@ on_ok_16:
 			const uint32_t nblocks = len >> 4;
 			const uint64_t *blocks = (const uint64_t*)src;
 
-			assert((size_t(src) & 63) == 0 && "src must be aligned to 64 bit");
+			assert((size_t(src) & 7) == 0 && "src must be aligned to 64 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1570,7 +1570,7 @@ on_ok_16:
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
 
-			assert((size_t(src) & 63) == 0 && "src must be aligned to 64 bit");
+			assert((size_t(src) & 7) == 0 && "src must be aligned to 64 bit");
 
 			uint64_t *in = (uint64_t*)src;
 			for (;len >= 8;len -= 8)
@@ -1615,7 +1615,7 @@ on_ok_16:
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
 
-			assert((size_t(src) & 63) == 0 && "src must be aligned to 64 bit");
+			assert((size_t(src) & 7) == 0 && "src must be aligned to 64 bit");
 
 			uint64_t *in = (uint64_t*)src;
 			for (;len >= 8;len -= 8)
