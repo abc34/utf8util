@@ -911,11 +911,11 @@ on_ok_16:
 		//set default memory allocation functions
 		struct allocator
 		{
-			static inline void* malloc(size_t size) { return ::malloc(size); };
+			static inline void* malloc(size_t size) { return ::_aligned_malloc(size, 1); };
 			static inline void* malloc_aligned(size_t size, size_t align) { return ::_aligned_malloc(size, align); };
-			static inline void* realloc(void* p, size_t size) { return ::realloc(p, size); }
-			static inline void  free(void* ptr) { return ::free(ptr); };
-			static inline size_t msize(void* ptr) { return ::_msize(ptr); };
+			static inline void* realloc(void* p, size_t size) { return ::_aligned_realloc(p, size, 1); }
+			static inline void  free(void* ptr) { return ::_aligned_free(ptr); };
+			static inline size_t msize(void* ptr) { return ::_aligned_msize(ptr, 1, 0); };
 		};
 
 #define data_alignment       4
@@ -1373,15 +1373,17 @@ on_ok_16:
 
 
 
-		void MurmurHash3_x86_32(const void* src, const uint32_t len, const uint32_t seed, uint32_t* out)
+		void MurmurHash3_x86_32(const void* src, const uint32_t len, const uint32_t seed, uint32_t out[1])
 		{
 			uint32_t i;
 			uint32_t k1;
 			uint32_t h1 = seed;
 			uint32_t c1 = 0xCC9E2D51UL;
 			uint32_t c2 = 0x1B873593UL;
-			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)src;
 			const uint8_t* tail;
+			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)src;
+
+			assert((size_t(src) & 31) == 0 && "src must be aligned to 32 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1407,7 +1409,7 @@ on_ok_16:
 		//0, "hello" => 613153351
 		//12,"hello world!" => 3336548647
 
-		void MurmurHash3_x86_128(const void* src, const uint32_t len, const uint32_t seed, uint32_t* out)
+		void MurmurHash3_x86_128(const void* src, const uint32_t len, const uint32_t seed, uint32_t out[4])
 		{
 			uint32_t i;
 			uint32_t k1, k2, k3, k4;
@@ -1416,8 +1418,10 @@ on_ok_16:
 			uint32_t c2 = 0xAB0E9789UL;
 			uint32_t c3 = 0x38B34AE5UL;
 			uint32_t c4 = 0xA1E38B93UL;
-			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)src;
 			const uint8_t* tail;
+			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)src;
+
+			assert((size_t(src) & 31) == 0 && "src must be aligned to 32 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1470,16 +1474,18 @@ on_ok_16:
 		//test http://murmurhash.shorelabs.com/
 		//12, "hello world!" => {0x74a452de3b195a0c, 0x4fc6b5bc134d03e6}
 
-		void MurmurHash3_x64_128(const void* src, const uint32_t len, const uint32_t seed, uint64_t* out)
+		void MurmurHash3_x64_128(const void* src, const uint32_t len, const uint32_t seed, uint64_t out[2])
 		{
 			uint32_t i;
 			uint64_t k1, k2;
 			uint64_t h1 = seed, h2 = seed;
 			uint64_t c1 = 0x87C37B91114253D5ULL;
 			uint64_t c2 = 0x4CF5AD432745937FULL;
+			const uint8_t* tail;
 			const uint32_t nblocks = len >> 4;
 			const uint64_t *blocks = (const uint64_t*)src;
-			const uint8_t* tail;
+
+			assert((size_t(src) & 63) == 0 && "src must be aligned to 64 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1534,8 +1540,10 @@ on_ok_16:
 		//SipHash a fast short-input pseudorandom function family with a 128-bit key and 64 or 128-bit output.
 		//SipHash-2-4 for best performance,
 		//SipHash-4-8 for conservative security.
-		//Source:	https://github.com/veorq/SipHash
-		//			https://github.com/majek/csiphash/blob/master/csiphash.c
+		//Source:
+		//https://github.com/veorq/SipHash
+		//https://github.com/rurban/smhasher (sse)
+		//https://github.com/majek/csiphash/blob/master/csiphash.c
 
 #define HALF_ROUND(a,b,c,d,s,t)	\
 		a += b; c += d;	\
@@ -1551,7 +1559,7 @@ on_ok_16:
 		HALF_ROUND(v2,v1,v0,v3,17,21);	\
 
 		// siphash-2-4, 128 bit key, 64 bit output
-		uint64_t siphash24_64(const void *src, uint32_t len, const uint64_t key[2])
+		void siphash24_64(const void *src, uint32_t len, const uint64_t key[2], uint64_t out[1])
 		{
 			uint64_t
 				t,
@@ -1562,36 +1570,34 @@ on_ok_16:
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
 
+			assert((size_t(src) & 63) == 0 && "src must be aligned to 64 bit");
+
 			uint64_t *in = (uint64_t*)src;
 			for (;len >= 8;len -= 8)
 			{
 				t = *in++;
 				v3 ^= t;
-				//c rounds
-				DOUBLE_ROUND(v0, v1, v2, v3);
+				DOUBLE_ROUND(v0, v1, v2, v3); //c = 2 rounds
 				v0 ^= t;
 			}
 			t = 0; uint8_t *m = (uint8_t*)in;
 			switch (len)
 			{
-			case 7: t |= (uint64_t)m[6] << 48;
-			case 6: t |= (uint64_t)m[5] << 40;
-			case 5: t |= (uint64_t)m[4] << 32;
-			case 4: t |= (uint64_t)m[3] << 24;
-			case 3: t |= (uint64_t)m[2] << 16;
-			case 2: t |= (uint64_t)m[1] << 8;
-			case 1: t |= (uint64_t)m[0];
+			case 7: t |= ((uint64_t)m[6]) << 48;
+			case 6: t |= ((uint64_t)m[5]) << 40;
+			case 5: t |= ((uint64_t)m[4]) << 32;
+			case 4: t |= ((uint64_t)m[3]) << 24;
+			case 3: t |= ((uint64_t)m[2]) << 16;
+			case 2: t |= ((uint64_t)m[1]) << 8;
+			case 1: t |= ((uint64_t)m[0]);
 			}
 			t |= b;
 			v3 ^= t;
-			//c rounds
-			DOUBLE_ROUND(v0, v1, v2, v3);
+			DOUBLE_ROUND(v0, v1, v2, v3); //c = 2 rounds
 			v0 ^= t;
 			v2 ^= 0xFF;
-			//d rounds
-			DOUBLE_ROUND(v0, v1, v2, v3);
-			DOUBLE_ROUND(v0, v1, v2, v3);
-			return v0 ^ v1 ^ v2 ^ v3;
+			DOUBLE_ROUND(v0, v1, v2, v3); DOUBLE_ROUND(v0, v1, v2, v3); //d = 4 rounds
+			*out = v0 ^ v1 ^ v2 ^ v3;
 		}
 		//test
 		//key = "1234567812345678",                      "hello world!" => 0x53bedbebc8d5bb58
@@ -1605,47 +1611,41 @@ on_ok_16:
 				k0 = key[0], k1 = key[1],
 				b = ((uint64_t)(len & 0xFF)) << 56,
 				v0 = k0 ^ 0x736F6D6570736575ULL,
-				v1 = k1 ^ 0x646F72616E646F6DULL,
+				v1 = k1 ^ 0x646F72616E646F83ULL,
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
 
-			v1 ^= 0xEE; //(128 siphash)
+			assert((size_t(src) & 63) == 0 && "src must be aligned to 64 bit");
 
 			uint64_t *in = (uint64_t*)src;
 			for (;len >= 8;len -= 8)
 			{
 				t = *in++;
 				v3 ^= t;
-				//c rounds
-				DOUBLE_ROUND(v0, v1, v2, v3);
+				DOUBLE_ROUND(v0, v1, v2, v3); //c = 2 rounds
 				v0 ^= t;
 			}
 			t = 0; uint8_t *m = (uint8_t*)in;
 			switch (len)
 			{
-			case 7: t |= (uint64_t)m[6] << 48;
-			case 6: t |= (uint64_t)m[5] << 40;
-			case 5: t |= (uint64_t)m[4] << 32;
-			case 4: t |= (uint64_t)m[3] << 24;
-			case 3: t |= (uint64_t)m[2] << 16;
-			case 2: t |= (uint64_t)m[1] << 8;
-			case 1: t |= (uint64_t)m[0];
+			case 7: t |= ((uint64_t)m[6]) << 48;
+			case 6: t |= ((uint64_t)m[5]) << 40;
+			case 5: t |= ((uint64_t)m[4]) << 32;
+			case 4: t |= ((uint64_t)m[3]) << 24;
+			case 3: t |= ((uint64_t)m[2]) << 16;
+			case 2: t |= ((uint64_t)m[1]) << 8;
+			case 1: t |= ((uint64_t)m[0]);
 			}
 			t |= b;
 			v3 ^= t;
-			//c rounds
-			DOUBLE_ROUND(v0, v1, v2, v3);
+			DOUBLE_ROUND(v0, v1, v2, v3); //c = 2 rounds
 			v0 ^= t;
-			v2 ^= 0xEE;//(128 siphash)
-			//d rounds
-			DOUBLE_ROUND(v0, v1, v2, v3);
-			DOUBLE_ROUND(v0, v1, v2, v3);
-			out[0] = v0 ^ v1 ^ v2 ^ v3; //store first 64 bit (128 siphash)
+			v2 ^= 0xEE;
+			DOUBLE_ROUND(v0, v1, v2, v3); DOUBLE_ROUND(v0, v1, v2, v3); //d = 4 rounds
+			out[0] = v0 ^ v1 ^ v2 ^ v3; //store first 64 bit
 			v1 ^= 0xDD;
-			//d rounds
-			DOUBLE_ROUND(v0, v1, v2, v3);
-			DOUBLE_ROUND(v0, v1, v2, v3);
-			out[1] = v0 ^ v1 ^ v2 ^ v3; //store second 64 bit (128 siphash)
+			DOUBLE_ROUND(v0, v1, v2, v3); DOUBLE_ROUND(v0, v1, v2, v3); //d = 4 rounds
+			out[1] = v0 ^ v1 ^ v2 ^ v3; //store second 64 bit
 		}
 		//test
 		//key = {0x0706050403020100,0x0f0e0d0c0b0a0908}, "hello world!" => {0x0357d28cd7973d91, 0x4457c7c13ac02a00}
@@ -1653,9 +1653,126 @@ on_ok_16:
 #undef HALF_ROUND
 #undef DOUBLE_ROUND
 
+#if 0
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define INLINE __forceinline
+#define NOINLINE __declspec(noinline)
+#define ROTL64(a,b) _rotl64(a,b)
+#define MM16 __declspec(align(16))
 
+#if (_MSC_VER >= 1500)
+#define __SSSE3__
+#endif
+#if (_MSC_VER > 1200) || defined(_mm_free)
+#define __SSE2__
+#endif
+#endif
 
+#if defined(__SSE2__)
+#include <emmintrin.h>
+		typedef __m128i xmmi;
+		typedef __m64 qmm;
 
+		typedef union packedelem64_t {
+			uint64_t u[2];
+			xmmi v;
+		} packedelem64;
+
+		typedef union packedelem8_t {
+			unsigned char u[16];
+			xmmi v;
+		} packedelem8;
+#endif
+
+#if defined(__SSSE3__)
+#include <tmmintrin.h>
+#endif
+		static const packedelem64 siphash_init[2] = {
+			{ { 0x736f6d6570736575ull,0x6c7967656e657261ull } },
+			{ { 0x646f72616e646f6dull,0x7465646279746573ull } }
+		};
+
+		static const packedelem64 siphash_final = {
+			{ 0x0000000000000000ull,0x00000000000000ffull }
+		};
+
+		static const packedelem8 siphash_rot16v3 = {
+			{ 14,15,8,9,10,11,12,13,8,9,10,11,12,13,14,15 }
+		};
+
+		uint64_t
+			siphash(const unsigned char key[16], const unsigned char *m, size_t len) {
+			xmmi k, v02, v20, v13, v11, v33, mi;
+			uint64_t last7;
+			uint32_t lo, hi;
+			size_t i, blocks;
+
+			k = _mm_loadu_si128((xmmi *)(key + 0));
+			v02 = siphash_init[0].v;
+			v13 = siphash_init[1].v;
+			v02 = _mm_xor_si128(v02, _mm_unpacklo_epi64(k, k));
+			v13 = _mm_xor_si128(v13, _mm_unpackhi_epi64(k, k));
+
+			last7 = (uint64_t)(len & 0xff) << 56;
+
+#define sipcompress() \
+	v11 = v13; \
+	v33 = v13; \
+	v11 = _mm_or_si128(_mm_slli_epi64(v11, 13), _mm_srli_epi64(v11, 64-13)); \
+	v02 = _mm_add_epi64(v02, v13); \
+	v33 = _mm_shuffle_epi8(v33, siphash_rot16v3.v); \
+	v13 = _mm_unpacklo_epi64(v11, v33); \
+	v13 = _mm_xor_si128(v13, v02); \
+	v20 = _mm_shuffle_epi32(v02, _MM_SHUFFLE(0,1,3,2)); \
+	v11 = v13; \
+	v33 = _mm_shuffle_epi32(v13, _MM_SHUFFLE(1,0,3,2)); \
+	v11 = _mm_or_si128(_mm_slli_epi64(v11, 17), _mm_srli_epi64(v11, 64-17)); \
+	v20 = _mm_add_epi64(v20, v13); \
+	v33 = _mm_or_si128(_mm_slli_epi64(v33, 21), _mm_srli_epi64(v33, 64-21)); \
+	v13 = _mm_unpacklo_epi64(v11, v33); \
+	v13 = _mm_unpacklo_epi64(v11, v33); \
+	v02 = _mm_shuffle_epi32(v20, _MM_SHUFFLE(0,1,3,2)); \
+	v13 = _mm_xor_si128(v13, v20);
+
+			for (i = 0, blocks = (len & ~7); i < blocks; i += 8) {
+				mi = _mm_loadl_epi64((xmmi *)(m + i));
+				v13 = _mm_xor_si128(v13, _mm_slli_si128(mi, 8));
+				sipcompress()
+					sipcompress()
+					v02 = _mm_xor_si128(v02, mi);
+			}
+
+			switch (len - blocks) {
+			case 7: last7 |= (uint64_t)m[i + 6] << 48;
+			case 6: last7 |= (uint64_t)m[i + 5] << 40;
+			case 5: last7 |= (uint64_t)m[i + 4] << 32;
+			case 4: last7 |= (uint64_t)m[i + 3] << 24;
+			case 3: last7 |= (uint64_t)m[i + 2] << 16;
+			case 2: last7 |= (uint64_t)m[i + 1] << 8;
+			case 1: last7 |= (uint64_t)m[i + 0];
+			case 0:
+			default:;
+			};
+
+			mi = _mm_unpacklo_epi32(_mm_cvtsi32_si128((uint32_t)last7), _mm_cvtsi32_si128((uint32_t)(last7 >> 32)));
+			v13 = _mm_xor_si128(v13, _mm_slli_si128(mi, 8));
+			sipcompress()
+				sipcompress()
+				v02 = _mm_xor_si128(v02, mi);
+			v02 = _mm_xor_si128(v02, siphash_final.v);
+			sipcompress()
+				sipcompress()
+				sipcompress()
+				sipcompress()
+
+				v02 = _mm_xor_si128(v02, v13);
+			v02 = _mm_xor_si128(v02, _mm_shuffle_epi32(v02, _MM_SHUFFLE(1, 0, 3, 2)));
+			lo = _mm_cvtsi128_si32(v02);
+			hi = _mm_cvtsi128_si32(_mm_srli_si128(v02, 4));
+			return ((uint64_t)hi << 32) | lo;
+		}
+#endif
 
 
 
