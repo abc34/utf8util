@@ -1369,7 +1369,13 @@ on_ok_16:
 
 
 
+//bswap for endianess, source: https://github.com/rurban/smhasher/blob/master/t1ha/t1ha_bits.h
+#define BSWAP64(v) ((v << 56) | (v >> 56) | ((v << 40) & 0x00ff000000000000ULL) | ((v << 24) & 0x0000ff0000000000ULL) | ((v << 8) & 0x000000ff00000000ULL) | ((v >> 8) & 0x00000000ff000000ULL) | ((v >> 24) & 0x0000000000ff0000ULL) | ((v >> 40) & 0x000000000000ff00ULL))
+#define BSWAP32(v) ((v << 24) | (v >> 24) | ((v << 8) & 0x00ff0000UL) | ((v >> 8) & 0x0000ff00UL))
+#define BSWAP16(v) (v << 8 | v >> 8)
 
+//unaligned memory access: load don't has huge issues, but store ~ 150 cycles;
+//  source https://github.com/dotnet/coreclr/issues/6540
 
 
 
@@ -1382,8 +1388,6 @@ on_ok_16:
 			uint32_t c2 = 0x1B873593UL;
 			const uint8_t* tail;
 			const uint32_t nblocks = len >> 2, *blocks = (const uint32_t*)src;
-
-			assert((size_t(src) & 3) == 0 && "src must be aligned to 32 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1408,6 +1412,7 @@ on_ok_16:
 		//0, "111"   => 4084848948
 		//0, "hello" => 613153351
 		//12,"hello world!" => 3336548647
+		//23, "Hello world! I am here!" => 3733080932
 
 		void MurmurHash3_x86_128(const void* src, const uint32_t len, const uint32_t seed, uint32_t out[4])
 		{
@@ -1420,8 +1425,6 @@ on_ok_16:
 			uint32_t c4 = 0xA1E38B93UL;
 			const uint8_t* tail;
 			const uint32_t nblocks = len >> 4, *blocks = (const uint32_t*)src;
-
-			assert((size_t(src) & 3) == 0 && "src must be aligned to 32 bit");
 
 			for (i = nblocks; i; --i)
 			{
@@ -1473,6 +1476,7 @@ on_ok_16:
 		}
 		//test http://murmurhash.shorelabs.com/
 		//12, "hello world!" => {0x74a452de3b195a0c, 0x4fc6b5bc134d03e6}
+		//23, "Hello world! I am here!" => {0x70666e8b205aecc7, 0x16a068921c88398e}
 
 		void MurmurHash3_x64_128(const void* src, const uint32_t len, const uint32_t seed, uint64_t out[2])
 		{
@@ -1485,11 +1489,9 @@ on_ok_16:
 			const uint32_t nblocks = len >> 4;
 			const uint64_t *blocks = (const uint64_t*)src;
 
-			assert((size_t(src) & 7) == 0 && "src must be aligned to 64 bit");
-
 			for (i = nblocks; i; --i)
 			{
-				k1 = *blocks++; k2 = *blocks++;
+				k1 = *blocks++; k2 = *blocks++;//0x6f77206f6c6c6548 //0x6120492021646c72
 				k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
 				h1 = (h1 << 27) | (h1 >> (64 - 27)); h1 += h2; h1 = h1 * 5 + 0x52DCE729ULL;
 				k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
@@ -1528,7 +1530,7 @@ on_ok_16:
 		//test http://murmurhash.shorelabs.com/
 		//1,  "hello"        => {0xa78ddff5adae8d10, 0x128900ef20900135}
 		//12, "hello world!" => {0xb267716273247be7, 0xcf7c7a126687dac0}
-
+		//23, "Hello world! I am here!" => {0x73c3dd2b5ed2e487, 0x0667416fcbcaad9c}
 
 
 
@@ -1569,8 +1571,6 @@ on_ok_16:
 				v1 = k1 ^ 0x646F72616E646F6DULL,
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
-
-			assert((size_t(src) & 7) == 0 && "src must be aligned to 64 bit");
 
 			uint64_t *in = (uint64_t*)src;
 			for (;len >= 8;len -= 8)
@@ -1615,8 +1615,6 @@ on_ok_16:
 				v2 = k0 ^ 0x6C7967656E657261ULL,
 				v3 = k1 ^ 0x7465646279746573ULL;
 
-			assert((size_t(src) & 7) == 0 && "src must be aligned to 64 bit");
-
 			uint64_t *in = (uint64_t*)src;
 			for (;len >= 8;len -= 8)
 			{
@@ -1653,126 +1651,6 @@ on_ok_16:
 #undef HALF_ROUND
 #undef DOUBLE_ROUND
 
-#if 0
-#if defined(_MSC_VER)
-#include <intrin.h>
-#define INLINE __forceinline
-#define NOINLINE __declspec(noinline)
-#define ROTL64(a,b) _rotl64(a,b)
-#define MM16 __declspec(align(16))
-
-#if (_MSC_VER >= 1500)
-#define __SSSE3__
-#endif
-#if (_MSC_VER > 1200) || defined(_mm_free)
-#define __SSE2__
-#endif
-#endif
-
-#if defined(__SSE2__)
-#include <emmintrin.h>
-		typedef __m128i xmmi;
-		typedef __m64 qmm;
-
-		typedef union packedelem64_t {
-			uint64_t u[2];
-			xmmi v;
-		} packedelem64;
-
-		typedef union packedelem8_t {
-			unsigned char u[16];
-			xmmi v;
-		} packedelem8;
-#endif
-
-#if defined(__SSSE3__)
-#include <tmmintrin.h>
-#endif
-		static const packedelem64 siphash_init[2] = {
-			{ { 0x736f6d6570736575ull,0x6c7967656e657261ull } },
-			{ { 0x646f72616e646f6dull,0x7465646279746573ull } }
-		};
-
-		static const packedelem64 siphash_final = {
-			{ 0x0000000000000000ull,0x00000000000000ffull }
-		};
-
-		static const packedelem8 siphash_rot16v3 = {
-			{ 14,15,8,9,10,11,12,13,8,9,10,11,12,13,14,15 }
-		};
-
-		uint64_t
-			siphash(const unsigned char key[16], const unsigned char *m, size_t len) {
-			xmmi k, v02, v20, v13, v11, v33, mi;
-			uint64_t last7;
-			uint32_t lo, hi;
-			size_t i, blocks;
-
-			k = _mm_loadu_si128((xmmi *)(key + 0));
-			v02 = siphash_init[0].v;
-			v13 = siphash_init[1].v;
-			v02 = _mm_xor_si128(v02, _mm_unpacklo_epi64(k, k));
-			v13 = _mm_xor_si128(v13, _mm_unpackhi_epi64(k, k));
-
-			last7 = (uint64_t)(len & 0xff) << 56;
-
-#define sipcompress() \
-	v11 = v13; \
-	v33 = v13; \
-	v11 = _mm_or_si128(_mm_slli_epi64(v11, 13), _mm_srli_epi64(v11, 64-13)); \
-	v02 = _mm_add_epi64(v02, v13); \
-	v33 = _mm_shuffle_epi8(v33, siphash_rot16v3.v); \
-	v13 = _mm_unpacklo_epi64(v11, v33); \
-	v13 = _mm_xor_si128(v13, v02); \
-	v20 = _mm_shuffle_epi32(v02, _MM_SHUFFLE(0,1,3,2)); \
-	v11 = v13; \
-	v33 = _mm_shuffle_epi32(v13, _MM_SHUFFLE(1,0,3,2)); \
-	v11 = _mm_or_si128(_mm_slli_epi64(v11, 17), _mm_srli_epi64(v11, 64-17)); \
-	v20 = _mm_add_epi64(v20, v13); \
-	v33 = _mm_or_si128(_mm_slli_epi64(v33, 21), _mm_srli_epi64(v33, 64-21)); \
-	v13 = _mm_unpacklo_epi64(v11, v33); \
-	v13 = _mm_unpacklo_epi64(v11, v33); \
-	v02 = _mm_shuffle_epi32(v20, _MM_SHUFFLE(0,1,3,2)); \
-	v13 = _mm_xor_si128(v13, v20);
-
-			for (i = 0, blocks = (len & ~7); i < blocks; i += 8) {
-				mi = _mm_loadl_epi64((xmmi *)(m + i));
-				v13 = _mm_xor_si128(v13, _mm_slli_si128(mi, 8));
-				sipcompress()
-					sipcompress()
-					v02 = _mm_xor_si128(v02, mi);
-			}
-
-			switch (len - blocks) {
-			case 7: last7 |= (uint64_t)m[i + 6] << 48;
-			case 6: last7 |= (uint64_t)m[i + 5] << 40;
-			case 5: last7 |= (uint64_t)m[i + 4] << 32;
-			case 4: last7 |= (uint64_t)m[i + 3] << 24;
-			case 3: last7 |= (uint64_t)m[i + 2] << 16;
-			case 2: last7 |= (uint64_t)m[i + 1] << 8;
-			case 1: last7 |= (uint64_t)m[i + 0];
-			case 0:
-			default:;
-			};
-
-			mi = _mm_unpacklo_epi32(_mm_cvtsi32_si128((uint32_t)last7), _mm_cvtsi32_si128((uint32_t)(last7 >> 32)));
-			v13 = _mm_xor_si128(v13, _mm_slli_si128(mi, 8));
-			sipcompress()
-				sipcompress()
-				v02 = _mm_xor_si128(v02, mi);
-			v02 = _mm_xor_si128(v02, siphash_final.v);
-			sipcompress()
-				sipcompress()
-				sipcompress()
-				sipcompress()
-
-				v02 = _mm_xor_si128(v02, v13);
-			v02 = _mm_xor_si128(v02, _mm_shuffle_epi32(v02, _MM_SHUFFLE(1, 0, 3, 2)));
-			lo = _mm_cvtsi128_si32(v02);
-			hi = _mm_cvtsi128_si32(_mm_srli_si128(v02, 4));
-			return ((uint64_t)hi << 32) | lo;
-		}
-#endif
 
 
 
