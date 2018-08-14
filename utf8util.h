@@ -14,9 +14,13 @@ typedef unsigned short     uint16_t;
 typedef unsigned int       uint32_t;
 typedef unsigned long long uint64_t;
 
+
+
 namespace LZ
 {
 	
+
+
 #if 0	
 	template<typename T>
 	class vec
@@ -30,12 +34,12 @@ namespace LZ
 		bool resize(int new_size)
 		{
 			assert(new_size >= 0);
-			T* p = _items = manager.malloc(sizeof(T)*new_size);
+			T* p = manager.malloc(sizeof(T)*new_size);
 			::memcpy_s(p, new_size * sizeof(T), _items, _size);
 			return init(p, new_size);
 		}
 	private:
-		bool init(T* p, int size) { clean(); _size = size; _items = p; if (p == 0)_items = manager.malloc(sizeof(T)*_size); return _items != 0; }
+		bool init(T* p, int size) { if (_items != 0) { manager.free(_items); } _size = size; _items = p; if (p == 0)_items = manager.malloc(sizeof(T)*_size); return _items != 0; }
 		void clean() { if (_items != 0) { manager.free(_items); _items = 0; _size = 0; } }
 		T*    _items;
 		int _size;
@@ -960,7 +964,7 @@ on_ok_16:
 
 
 
-	namespace memory
+	namespace MEMORY
 	{
 		//LogBase2 ~ 26 sec (DeBruijn)
 		//int LogBase2_32(uint32_t n) { static const int table[32] = {0,9,1,10,13,21,2,29,11,14,16,18,22,25,3,30,8,12,20,28,15,17,24,7,19,27,23,6,26,5,4,31}; n |= n >> 1; n |= n >> 2; n |= n >> 4; n |= n >> 8; n |= n >> 16; return n ? table[(n * 0x07C4ACDDU) >> 27] : -1; };
@@ -1108,15 +1112,15 @@ on_ok_16:
 		class page_manager
 		{
 		public:
-			page_manager()
+			page_manager() noexcept
 			{
 				_pool_ptr = 0;_pool_size = 0;
 			}
-			page_manager(void* pool, uint32_t bytes)
+			page_manager(void* pool, uint32_t bytes) noexcept
 			{
 				_pool_ptr = 0;_pool_size = 0; create(pool, bytes);
 			}
-			~page_manager()
+			~page_manager() noexcept
 			{
 				destroy();
 			}
@@ -1516,8 +1520,11 @@ on_ok_16:
 
 
 
+	}//end namespace memory
 
-//bswap for endianess, source: https://github.com/rurban/smhasher/blob/master/t1ha/t1ha_bits.h
+	namespace HASH
+	{
+		//bswap for endianess, source: https://github.com/rurban/smhasher/blob/master/t1ha/t1ha_bits.h
 #define BSWAP64(v) ((v << 56) | (v >> 56) | ((v << 40) & 0x00ff000000000000ULL) | ((v << 24) & 0x0000ff0000000000ULL) | ((v << 8) & 0x000000ff00000000ULL) | ((v >> 8) & 0x00000000ff000000ULL) | ((v >> 24) & 0x0000000000ff0000ULL) | ((v >> 40) & 0x000000000000ff00ULL))
 #define BSWAP32(v) ((v << 24) | (v >> 24) | ((v << 8) & 0x00ff0000UL) | ((v >> 8) & 0x0000ff00UL))
 #define BSWAP16(v) (v << 8 | v >> 8)
@@ -1549,7 +1556,7 @@ on_ok_16:
 			case 3: k1 ^= uint32_t(tail[2]) << 16;
 			case 2: k1 ^= uint32_t(tail[1]) << 8;
 			case 1: k1 ^= uint32_t(tail[0]);
-					k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+				k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
 			//finalization (for incremental update h1 = seed)
 			h1 ^= len;
@@ -1593,22 +1600,22 @@ on_ok_16:
 			case 15: k4 ^= uint32_t(tail[14]) << 16;
 			case 14: k4 ^= uint32_t(tail[13]) << 8;
 			case 13: k4 ^= uint32_t(tail[12]) << 0;
-					 k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
+				k4 *= c4; k4 = (k4 << 18) | (k4 >> (32 - 18)); k4 *= c1; h4 ^= k4;
 			case 12: k3 ^= uint32_t(tail[11]) << 24;
 			case 11: k3 ^= uint32_t(tail[10]) << 16;
 			case 10: k3 ^= uint32_t(tail[9]) << 8;
 			case  9: k3 ^= uint32_t(tail[8]) << 0;
-					 k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
+				k3 *= c3; k3 = (k3 << 17) | (k3 >> (32 - 17)); k3 *= c4; h3 ^= k3;
 			case  8: k2 ^= uint32_t(tail[7]) << 24;
 			case  7: k2 ^= uint32_t(tail[6]) << 16;
 			case  6: k2 ^= uint32_t(tail[5]) << 8;
 			case  5: k2 ^= uint32_t(tail[4]) << 0;
-					 k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
+				k2 *= c2; k2 = (k2 << 16) | (k2 >> (32 - 16)); k2 *= c3; h2 ^= k2;
 			case  4: k1 ^= uint32_t(tail[3]) << 24;
 			case  3: k1 ^= uint32_t(tail[2]) << 16;
 			case  2: k1 ^= uint32_t(tail[1]) << 8;
 			case  1: k1 ^= uint32_t(tail[0]) << 0;
-					 k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
+				k1 *= c1; k1 = (k1 << 15) | (k1 >> (32 - 15)); k1 *= c2; h1 ^= k1;
 			};
 			//finalization (for incremental update h1 = h2 = h3 = h4 = seed)
 			h1 ^= len; h2 ^= len; h3 ^= len; h4 ^= len;
@@ -1656,7 +1663,7 @@ on_ok_16:
 			case 11: k2 ^= uint64_t(tail[10]) << 16;
 			case 10: k2 ^= uint64_t(tail[9]) << 8;
 			case  9: k2 ^= uint64_t(tail[8]) << 0;
-					 k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
+				k2 *= c2; k2 = (k2 << 33) | (k2 >> (64 - 33)); k2 *= c1; h2 ^= k2;
 			case  8: k1 ^= uint64_t(tail[7]) << 56;
 			case  7: k1 ^= uint64_t(tail[6]) << 48;
 			case  6: k1 ^= uint64_t(tail[5]) << 40;
@@ -1665,7 +1672,7 @@ on_ok_16:
 			case  3: k1 ^= uint64_t(tail[2]) << 16;
 			case  2: k1 ^= uint64_t(tail[1]) << 8;
 			case  1: k1 ^= uint64_t(tail[0]) << 0;
-					 k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
+				k1 *= c1; k1 = (k1 << 31) | (k1 >> (64 - 31)); k1 *= c2; h1 ^= k1;
 			};
 			//finalization (for incremental update h1 = h2 = seed)
 			h1 ^= len; h2 ^= len;
@@ -1799,11 +1806,197 @@ on_ok_16:
 #undef HALF_ROUND
 #undef DOUBLE_ROUND
 
+		//Fast Hash
+		//https://stackoverflow.com/questions/664014/what-integer-hash-function-are-good-that-accepts-an-integer-hash-key
+		//Each input bit affects each output bit with about 50% probability.
+		//There are no collisions (each input results in a different output).
+		//The algorithm is fast except if the CPU doesn't have a built-in integer multiplication unit.
+		unsigned int fast_hash(uint32_t x) {
+			x = ((x >> 16) ^ x) * 0x45d9f3b;
+			x = ((x >> 16) ^ x) * 0x45d9f3b;
+			x = (x >> 16) ^ x;
+			return x;
+		}
+		unsigned int fast_unhash(uint32_t x) {
+			x = ((x >> 16) ^ x) * 0x119de1f3;
+			x = ((x >> 16) ^ x) * 0x119de1f3;
+			x = (x >> 16) ^ x;
+			return x;
+		}
+		uint64_t fast_hash64(uint64_t x) {
+			x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9LLU;
+			x = (x ^ (x >> 27)) * 0x94d049bb133111ebLLU;
+			x = x ^ (x >> 31);
+			return x;
+		}
+		uint64_t fast_unhash64(uint64_t x) {
+			x = (x ^ (x >> 31) ^ (x >> 62)) * 0x319642b2d24d8ec3LLU;
+			x = (x ^ (x >> 27) ^ (x >> 54)) * 0x96de1b173f119089LLU;
+			x = x ^ (x >> 30) ^ (x >> 60);
+			return x;
+		}
 
 
-
-
-
-
-	}//end namespace memory
+	}//end namespace HASH
 }//end namespace LZ - lazy
+
+
+
+
+
+static LZ::MEMORY::page_manager MMG(0, 0x100000);
+
+
+
+
+class HashMap
+{
+public:
+	HashMap() : keys(0), size(0), count(0) { rehash(16); };
+	~HashMap() { rehash(0); };
+	bool rehash(uint32_t new_size)
+	{
+		if (new_size == 0) { MMG.free(keys);keys = 0;size = count = 0; return true; }
+		if (size == new_size) return true;
+		uint32_t i, h, *pkv;
+		while (1)
+		{
+			pkv = (uint32_t *)MMG.malloc(2 * new_size * sizeof(uint32_t));
+			if (pkv == 0) { return false; }
+			::memset(pkv, 0, 2 * new_size * sizeof(uint32_t));
+			if (size == 0)break;
+			for (i = 0;i < size;i++)
+			{
+				if (keys[i] == 0)continue;
+				//h = LZ::HASH::fast_hash(keys[i]) % new_size;
+				LZ::HASH::MurmurHash3_x86_32(&keys[i], 4, new_size, &h);
+				h %= new_size;
+				if (pkv[h] != 0)break;
+				pkv[h] = keys[i];pkv[new_size + h] = keys[size + i];
+			}
+			if (i == size) { MMG.free(keys);break; }
+			MMG.free(pkv);new_size += 7;
+		}
+		keys = pkv;size = new_size;
+		return true;
+	};
+	bool insert(uint32_t k, uint32_t v)
+	{
+		uint32_t i, h;
+		//h = LZ::HASH::fast_hash(k);
+		LZ::HASH::MurmurHash3_x86_32(&k, 4, size, &h);
+		while (1)
+		{
+			i = h % size;
+			if (keys[i] == 0 || keys[i] == k) break;
+			if (rehash(size + 7) == false)return false;
+		}
+		keys[i] = k;keys[i + size] = v;count++;
+		return true;
+	};
+public:
+	uint32_t * keys;
+	uint32_t size;
+	uint32_t count;
+};
+
+
+/*
+template<typename T>
+class array
+{//without new operator
+public:
+	array() : _items(0) { init(0, 16); }
+	array(int size) : _items(0) { init(0, size); }
+	array(array&& v) : _items(0) { init(v._items, v._size); v._items = 0; }
+	~array() { clean(); }
+	T* operator*() { return _items; }
+	bool resize(int new_size)
+	{
+		assert(new_size >= 0);
+		T* p = _items ? ::realloc(_items, sizeof(T)*new_size) : 0;
+		if (p == 0) { p = ::malloc(sizeof(T)*new_size);::memcpy_s(p, new_size * sizeof(T), _items, _size); } else _items = 0;
+		return init(p, new_size);
+	}
+private:
+	bool init(T* p, int size) { _size = size; _items = p; if (p == 0)_items = ::malloc(sizeof(T)*_size); return _items != 0; }
+	void clean() { if (_items != 0) { ::free(_items); _items = 0; _size = 0; } }
+	T * _items;
+	int _size;
+};
+*/
+
+
+//Vector fixed size
+//without new operator
+template<class T, const int Count>
+class VEC
+{
+public:
+	VEC() { ::memset(_items, 0, sizeof(T)*Count); }
+	~VEC() {}
+	T& operator[](uint32_t i) { return _items[i]; }
+	VEC& operator=(VEC& v) { memcpy_s(_items, sizeof(T)*Count, v._items, sizeof(T)*Count); return *this; }
+private:
+	T _items[Count];
+};
+
+
+
+//linked list of elements
+template <class T, const int Capacity>
+class LList
+{
+public:
+	typedef struct { uint8_t inext, iprev; } IL;
+	LList() : count(0), imin(0), imax(0), next(0), prev(0) { };
+	~LList() { };
+	bool insert(T k, T v)
+	{
+		if (count >= Capacity)return false; //its full
+		int i = count++, j;
+		keys[i] = k;vals[i] = v;
+		if (count == 1)return true;
+		if (k < keys[imin])
+		{
+			inx[i].inext = imin;
+			inx[i].iprev = 0;
+			inx[imin].iprev = i;
+			imin = i;
+			return true;
+		}
+		if (k > keys[imax])
+		{
+			inx[i].inext = 0;
+			inx[i].iprev = imax;
+			inx[imax].inext = i;
+			imax = i;
+			return true;
+		}
+		j = imin;
+		while (k > keys[j])
+		{ 
+			j = inx[j].inext;
+		}
+		//here k <= keys[j], then set inx
+		inx[i].inext = j;
+		inx[i].iprev = inx[j].iprev;
+		inx[j].iprev = i;
+		j = inx[i].iprev;
+		inx[j].inext = i;
+		return true;
+	};
+public:
+	VEC<T, Capacity> keys;	//16 bytes + 16 type T elements
+	VEC<T, Capacity> vals;	//16 bytes + 16 type T elements
+	VEC<IL, Capacity> inx;	//index of next and prev elements in keys|vals
+	uint8_t count;			//number inserted elements in keys|vals of type T
+	uint8_t imin;
+	uint8_t imax;
+	LList * next;
+	LList * prev;
+};
+
+
+//template <class T>
+//class OrdList
