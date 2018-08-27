@@ -1053,9 +1053,9 @@ on_ok_16:
 		//Возможные улучшения (TODO):
 		//Для малых размеров 32 бит для поля size избыточно.
 		//  Тогда для хранения размера можно использовать столько байт, сколько требуется.
-		//  В этом случае для определения 1,2,3 или 4 байт можно использовать 2 и 3 биты size.
-		//  Из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
-		//  эта мера не будет эффективной. Минимально всё равно будет 4 байта.
+		//    В этом случае для определения 1,2,3 или 4 байт можно использовать 2-й и 3-й биты size.
+		//    Но из-за выравниваения по 4 байта адреса блока и его размера, возможно, что
+		//    эта мера не будет эффективной. Минимально всё равно будет 4 байта.
 		//Можно не вычислять fti, если вместе с size хранить его fti.
 		//Можно все указатели сделать uint32_t*, вместо uint8_t*.
 
@@ -1844,11 +1844,11 @@ on_ok_16:
 
 
 
-static LZ::MEMORY::page_manager MMG(0, 0x100000);
+static LZ::MEMORY::page_manager MMG(0, 10*1024*1024);
 
 
 
-
+/*
 class HashMap
 {
 public:
@@ -1899,7 +1899,7 @@ public:
 	uint32_t size;
 	uint32_t count;
 };
-
+*/
 
 /*
 template<typename T>
@@ -1926,77 +1926,102 @@ private:
 };
 */
 
+//vec1 < vec2 < ... < vecn
+//[...]->[...]->...->[...]
+//Для резервирования памяти можно выделить 256 байт вызовом malloc(256),
+//а затем укоротить до 16 вызовом realloc(ptr, 16).
+//При необходимости можно удлинять участок вызовом realloc(ptr, new_size).
+//Тогда уменьшается вероятность выделения и перемещения на новый участок.
 
-//Vector fixed size
-//without new operator
-template<class T, const int Count>
-class VEC
+//!!! Capacity < 256
+template<class T, const uint32_t Capacity>
+struct VecC
 {
-public:
-	VEC() { ::memset(_items, 0, sizeof(T)*Count); }
-	~VEC() {}
-	T& operator[](uint32_t i) { return _items[i]; }
-	VEC& operator=(VEC& v) { memcpy_s(_items, sizeof(T)*Count, v._items, sizeof(T)*Count); return *this; }
-private:
-	T _items[Count];
+	typedef struct { uint8_t inext; } I;
+	VecC() noexcept : count(0), imin(0), imax(0) {};
+	bool insert(T v) noexcept
+	{
+		int i, j, j1;
+		if (count >= Capacity) return false;
+		i = count++; vals[i] = v;
+		if (i == 0)return true;
+		if (v <= vals[imin]) { inx[i].inext = imin;imin = i; }
+		else if (v >= vals[imax]) { inx[i].inext = inx[imax].inext = i;imax = i; }
+		else {
+			j = j1 = imin;while (v >= vals[j]) { j1 = j;j = inx[j].inext; }
+			inx[i].inext = j;inx[j1].inext = i;
+		}
+		return true;
+	};
+	T replace_min(T v) noexcept
+	{
+		int i = imin, j, j1;
+		T v1 = vals[i];vals[i] = v;imin = inx[i].inext;
+		if (v <= vals[imin]) { inx[i].inext = imin;imin = i; }
+		else if (v >= vals[imax]) { inx[i].inext = inx[imax].inext = i;imax = i; }
+		else {
+			j = j1 = imin;while (v >= vals[j]) { j1 = j;j = inx[j].inext; }
+			inx[i].inext = j;inx[j1].inext = i;
+		}
+		return v1;
+	};
+	uint8_t count;		//number inserted elements in [keys]
+	uint8_t imin;		//index of min key
+	uint8_t imax;		//index of max key
+	uint8_t stub;		//reserved field
+	I inx[Capacity];	//vector of indices of the next (larger) elements
+	T vals[Capacity];	//vector of keys
+	VecC* prev;
 };
 
 
-
-//linked list of elements
-template <class T, const int Capacity>
+template <class T, const uint32_t NodeCapacity>
 class LList
 {
 public:
-	typedef struct { uint8_t inext, iprev; } IL;
-	LList() : count(0), imin(0), imax(0), next(0), prev(0) { };
-	~LList() { };
-	bool insert(T k, T v)
+	typedef VecC<T, NodeCapacity> V;
+	LList() : first(0), last(0) {}
+	~LList() {}
+	void* allocate_node() { void *p = MMG.malloc(sizeof(V));if (p)::memset(p, 0, sizeof(V));return p; }
+	bool insert(T v)
 	{
-		if (count >= Capacity)return false; //its full
-		int i = count++, j;
-		keys[i] = k;vals[i] = v;
-		if (count == 1)return true;
-		if (k < keys[imin])
+		if (first == 0) { if (!(first = (V*)allocate_node())) return false; last = first; }
+		V *p = last;
+		while (p->prev != 0 && v < p->vals[p->imin]) { p = p->prev; }
+		while (1)
 		{
-			inx[i].inext = imin;
-			inx[i].iprev = 0;
-			inx[imin].iprev = i;
-			imin = i;
-			return true;
+			if (p->count < NodeCapacity)break;
+			//если блок полный, то переносим min value в предыдущий блок,
+			//а на его место сохраним v
+			v = p->replace_min(v);
+			if (p->prev == 0) { if (!(p->prev = (V*)allocate_node())) return false; first = p->prev; }
+			p = p->prev;
 		}
-		if (k > keys[imax])
-		{
-			inx[i].inext = 0;
-			inx[i].iprev = imax;
-			inx[imax].inext = i;
-			imax = i;
-			return true;
-		}
-		j = imin;
-		while (k > keys[j])
-		{ 
-			j = inx[j].inext;
-		}
-		//here k <= keys[j], then set inx
-		inx[i].inext = j;
-		inx[i].iprev = inx[j].iprev;
-		inx[j].iprev = i;
-		j = inx[i].iprev;
-		inx[j].inext = i;
-		return true;
+		return p->insert(v);
+	}
+
+
+
+	class iterator
+	{
+	public:
+		iterator() = delete;
+		iterator(V *p, int i) noexcept : ix(i), ptr(p) {};
+		bool operator==(iterator it) noexcept { return it.ptr == ptr && it.ix == ix; }
+		bool operator!=(iterator it) noexcept { return it.ptr != ptr || it.ix != ix; }
+		iterator& operator++() noexcept { if (ptr == 0)return *this;if (ix != ptr->inx[ix].inext) { ix = ptr->inx[ix].inext; } else { ptr = ptr->prev;ix = ptr ? ptr->imin : 0; }return *this; }
+		iterator& operator++(int) noexcept { return operator++(); }
+		T operator*() noexcept { return ptr ? ptr->vals[ix] : T(0); }
+	private:
+		int ix;
+		V *ptr;
 	};
+	iterator begin() const noexcept { return iterator(last, last ? last->imin : 0); }
+	iterator end() const noexcept { return iterator(0, 0); }
+
 public:
-	VEC<T, Capacity> keys;	//16 bytes + 16 type T elements
-	VEC<T, Capacity> vals;	//16 bytes + 16 type T elements
-	VEC<IL, Capacity> inx;	//index of next and prev elements in keys|vals
-	uint8_t count;			//number inserted elements in keys|vals of type T
-	uint8_t imin;
-	uint8_t imax;
-	LList * next;
-	LList * prev;
+	V * first;
+	V * last;
 };
 
 
-//template <class T>
-//class OrdList
