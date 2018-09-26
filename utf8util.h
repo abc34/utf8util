@@ -1395,15 +1395,15 @@ on_ok_16:
 			}
 			void* realloc(void* ptr, uint32_t size)
 			{
-			#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
-				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size)) { return allocator::realloc(ptr, size); }
-			#else
-				assert(ptr > _pool_ptr && ptr < cast_data_header(_pool_ptr, _pool_size) && "ptr must be in the pool");
-			#endif
 				//treated as malloc
 				if (ptr == 0) { return malloc(size); }
 				//treated as free
 				if (size == 0) { free(ptr); return 0; }
+#if defined(USE_EXTERNAL_ALLOCATOR_ON_FAILURE)
+				if (ptr < _pool_ptr || ptr >= cast_data_header(_pool_ptr, _pool_size)) { return allocator::realloc(ptr, size); }
+#else
+				assert(ptr > _pool_ptr && ptr < cast_data_header(_pool_ptr, _pool_size) && "ptr must be in the pool");
+#endif
 				//realloc
 				//alignment of size
 				uint32_t required_size, cur_size, unused_left, unused_right, join_size;
@@ -1847,6 +1847,615 @@ on_ok_16:
 static LZ::MEMORY::page_manager MMG(0, 10*1024*1024);
 
 
+//Массив элементов с доступом по индексу динамически расширяющийся.
+//Состоит из отдельных блоков по 1<<BlockOrder элементов в каждом.
+//Указатели на блоки хранятся в массиве, динамически расширяющийся
+//с шагом Step.
+//template <class ItemType, unsigned short BlockOrder,unsigned short Step>
+//class DynArray
+//{
+//public:
+//	typedef ItemType* ItemBlockPtr;
+//	enum { BlockSize = (1 << BlockOrder), BlockMask = (1 << BlockOrder) - 1 };
+//	DynArray() { init(); }
+//	~DynArray() {}
+//	void init() { ::memset(this, 0, sizeof(DynArray)); }
+//	bool alloc()
+//	{
+//		ItemBlockPtr *p = (ItemBlockPtr*) MMG.realloc(ptr_array, (capacity + Step) * sizeof(ItemBlockPtr));
+//		if (p == 0) { dealloc();return false; }
+//		::memset(p + capacity, 0, Step * sizeof(ItemBlockPtr));
+//		ptr_array = p;capacity += Step;
+//		return true;
+//	}
+//	void dealloc() { if (count) { for (unsigned int i = 0;i < capacity;i++)dealloc_block(i);MMG.free(ptr_array);init(); } }
+//	bool allock_block(unsigned int i) { return (ptr_array[i] = (ItemType*)MMG.malloc(BlockSize * sizeof(ItemType))) != 0; }
+//	void dealloc_block(unsigned int i) { if (ptr_array[i])MMG.free(ptr_array[i]);ptr_array[i] = 0; }
+//	bool push(ItemType item)
+//	{
+//		unsigned int i = count >> BlockOrder;
+//		if (i >= capacity && !alloc())return false;
+//		if (ptr_array[i] == 0 && !allock_block(i))return false;
+//		ptr_array[i][count & BlockMask] = item;count++;
+//		return true;
+//	}
+//	bool isExist(unsigned int i) { return i < count && ptr_array[i >> BlockOrder]; }
+//	bool getItem(unsigned int i, ItemType* dst) { if (i >= count || ptr_array[i >> BlockOrder] == 0) return false; ::memcpy_s(dst, sizeof(ItemType), &ptr_array[i >> BlockOrder][i & BlockMask], sizeof(ItemType)); return true; }
+//	bool setItem(unsigned int i, ItemType* src) { if (i >= count) if (ptr_array[i >> BlockOrder] == 0 && !allock_block(i >> BlockOrder)) return false; ::memcpy_s(&ptr_array[i >> BlockOrder][i & BlockMask], sizeof(ItemType), src, sizeof(ItemType)); return true; }
+//	inline ItemType& operator[](const unsigned int i) { return ptr_array[i >> BlockOrder][i & BlockMask]; }
+//
+//	ItemBlockPtr *ptr_array;
+//	unsigned int capacity;
+//	unsigned int count;
+//};
+
+
+
+
+template <class ItemType, unsigned short BlockOrder, unsigned short Capacity>
+class DynArray
+{
+public:
+	typedef ItemType* ItemBlock;
+	enum { BlockSize = (1 << BlockOrder), BlockMask = (1 << BlockOrder) - 1 };
+	DynArray() { init(); }
+	~DynArray() { dealloc(); }
+	void init() { ::memset(this, 0, sizeof(DynArray)); }
+	bool allock_block(unsigned int i)
+	{ 
+		//unsigned int i;
+		return (ptr_array[i] = (ItemType*)MMG.malloc(BlockSize * sizeof(ItemType))) != 0;
+	}
+	void dealloc() { if (count) { for (unsigned int i = 0;i < Capacity;i++)if(ptr_array[i])MMG.free(ptr_array[i]);init(); } }
+	bool push(ItemType item)
+	{
+		unsigned int i = count >> BlockOrder, j = count & BlockMask;
+		if (j == 0 && !allock_block(i))return false;
+		ptr_array[i][j] = item;count++;
+		return true;
+	}
+	//bool isExist(unsigned int i) { return i < count && ptr_array[i >> BlockOrder]; }
+	//bool getItem(unsigned int i, ItemType& dst) { if (i >= count || ptr_array[i >> BlockOrder] == 0) return false; dst = ptr_array[i >> BlockOrder][i & BlockMask]; return true; }
+	//bool setItem(unsigned int i, ItemType& src) { if (ptr_array[i >> BlockOrder] == 0 && !allock_block(i >> BlockOrder)) return false; ptr_array[i >> BlockOrder][i & BlockMask] = src; return true; }
+	inline ItemType& operator[](const unsigned int i) { return ptr_array[i >> BlockOrder][i & BlockMask]; }
+
+	ItemBlock ptr_array[Capacity];
+	//unsigned int m;
+	unsigned int count;
+};
+
+
+///*
+template <class KeyType, class ValType, class InxType, unsigned int InxBits>
+class DynamicTree
+{
+public:
+	const enum { MaxSize = (1 << InxBits) - 1 };
+	typedef struct { KeyType key; ValType val; } ItemType;
+	typedef DynArray<ItemType, 12, 16> DynA;
+public:
+	DynamicTree() { init(); }
+	~DynamicTree() { dealloc(); }
+	bool init() { ::memset(this, 0, sizeof(DynamicTree)); return alloc(); }
+	bool alloc()
+	{
+		if (capacity == 0) capacity++;capacity <<= 1;capacity++;
+		void* p = MMG.malloc(capacity * sizeof(InxType));if (p == 0) { MMG.free(p);dealloc();return false; }
+		::memset(p, 0, capacity * sizeof(InxType));
+		if (inx)
+		{
+			InxType *pdest = ((InxType*)p) + 1, *pend = ((InxType*)p) + capacity, *psource = inx;
+			while (pdest < pend) { *pdest = *psource++;pdest += 2; }
+			MMG.free(inx);
+		}
+		inx = (InxType*)p;
+		return true;
+	}
+	void dealloc() { if (inx)MMG.free(inx);items.dealloc();::memset(this, 0, sizeof(DynamicTree)); }
+	bool insert(KeyType key, ValType val)
+	{
+		if (count >= capacity && !alloc())return false;
+		//для обнаружения в inx незанятой ячейки будем использовать 0
+		//тогда нумерацию будем вести начиная с 1
+		//указатель на массив inx следует сместить на 1
+		InxType *idx = inx - 1;
+		ItemType item;item.key = key; item.val = val;
+		unsigned int size = capacity + 1, s = size >> 1, step = s, sz = (count + 1) >> 1;
+		//спуск на нижний уровень
+		while (sz)
+		{
+			assert(key != items[idx[s] - 1].key);
+			sz >>= 1;step >>= 1; if (key < items[idx[s] - 1].key)s -= step;else s += step;//16-12.5 sec,12-14.8 sec
+		}
+		if (idx[s])
+		{
+			step <<= 1;//set double step for search the empty element
+			//поиск ближайшего пустого слева или справа на текущем уровне
+			InxType *lit, *rit; lit = rit = &idx[s];
+			if (s < (size >> 1))
+			{
+				while (lit > idx && *lit && *rit) { lit -= step;rit += step; };
+				if ((lit <= idx || *lit) && *rit)
+				{
+					while (rit < &idx[size] && *rit) { rit += step; };
+					assert(rit < &idx[size] && *rit == 0);
+				}
+			}
+			else
+			{
+				while (rit < &idx[size] && *lit && *rit) { lit -= step;rit += step; };
+				if ((rit >= &idx[size] || *rit) && *lit)
+				{
+					while (lit > idx && *lit) { lit -= step; };
+					assert(lit > idx && *lit == 0);
+				}
+			}
+			step >>= 1;//reset double step
+			//сдвиг элементов влево или вправо
+			if (rit < &idx[size] && *rit == 0)
+			{
+				lit = rit - step;
+				if (step == 1)::memmove(&idx[s + 1], &idx[s], (rit - &idx[s]) * sizeof(InxType));
+				else while (rit > &idx[s]) { *rit = *lit; rit -= step;lit -= step; }
+				if (key > items[idx[s] - 1].key)s += step;
+			}
+			else
+			{
+				rit = lit + step;
+				if (step == 1)::memmove(lit, lit + 1, (&idx[s] - lit) * sizeof(InxType));
+				else while (lit < &idx[s]) { *lit = *rit;lit += step;rit += step; }
+				if (key < items[idx[s] - 1].key)s -= step;
+			}
+		}
+		items.push(item); count++; idx[s] = count;
+		return true;
+	}
+public:
+	unsigned int count;
+	unsigned int capacity;
+	InxType* inx;
+	DynA items;
+};
+//*/
+
+/*
+template <class KeyType, class ValType, class InxType, unsigned int InxBits>
+class DynamicTree
+{
+public:
+	const enum { MaxSize = (1 << InxBits) - 1 };
+	typedef struct { KeyType key; ValType val; } ItemType;
+public:
+	DynamicTree() { init(); }
+	~DynamicTree() { dealloc(); }
+	bool init() { ::memset(this, 0, sizeof(DynamicTree)); return alloc(); }
+	bool alloc()
+	{
+		void *p1, *p2;
+		if (capacity == 0) capacity++;
+		capacity <<= 1;capacity++;
+		p1 = MMG.malloc(capacity * sizeof(InxType)); p2 = MMG.realloc(items, capacity * sizeof(ItemType));
+		if (p1 == 0 || p2 == 0) { if (p1 == 0)MMG.free(p1);if (p2 == 0)MMG.free(p2);dealloc();return false; }
+		::memset(p1, 0, capacity * sizeof(InxType));
+		if (inx)
+		{
+			InxType *pdest = ((InxType*)p1) + 1, *pend = ((InxType*)p1) + capacity, *psource = inx;
+			while (pdest < pend){ *pdest = *psource++;pdest += 2; }
+			MMG.free(inx);
+		}
+		inx = (InxType*)p1;items = (ItemType*)p2;
+		return true;
+	}
+	void dealloc() { if (inx)MMG.free(inx);if (items)MMG.free(items);::memset(this, 0, sizeof(DynamicTree)); }
+	bool insert(KeyType key, ValType val)
+	{
+		if (count >= capacity && !alloc())return false;
+		unsigned int size = capacity + 1, s = size >> 1, step = s, sz = (count + 1) >> 1;
+		//для обнаружения в inx незанятой ячейки будем использовать 0
+		//тогда нумерацию будем вести начиная с 1
+		//указатель на массив items следует сместить на 1
+		InxType *idx = inx - 1; ItemType *d = items - 1;
+		//спуск на нижний уровень
+		while (sz)
+		{
+			assert(key != d[idx[s]].key);
+			sz >>= 1;step >>= 1; if (key < d[idx[s]].key)s -= step;else s += step;
+			//00007FF7E52E3401  mov         eax,edi  
+			//00007FF7E52E3403  mov         edx,r8d  
+			//00007FF7E52E3406  shr         r14d,1  
+			//00007FF7E52E3409  shr         r8d,1  
+			//00007FF7E52E340C  movzx       ecx,word ptr [rbx+rax*2]  
+			//00007FF7E52E3410  lea         eax,[r14+rdi]  
+			//00007FF7E52E3414  sub         edi,r14d  
+			//00007FF7E52E3417  cmp         r13w,word ptr [r15+rcx*8-8]  
+			//00007FF7E52E341D  cmovae      edi,eax  
+			//00007FF7E52E3420  cmp         edx,2  
+			//00007FF7E52E3423  jae         DynamicTree<unsigned short,unsigned int,unsigned short,16>::insert+71h (07FF7E52E3401h)
+		}
+		if (idx[s])
+		{
+			step <<= 1;//set double step for search the empty element
+			//поиск ближайшего пустого слева или справа на текущем уровне
+			InxType *lit, *rit; lit = rit = &idx[s];
+			if (s < (size >> 1))
+			{
+				while (lit > idx && *lit && *rit) { lit -= step;rit += step; };
+				if ((lit <= idx || *lit) && *rit)
+				{
+					while (rit < &idx[size] && *rit) { rit += step; };
+					assert(rit < &idx[size] && *rit == 0);
+				}
+			}
+			else
+			{
+				while (rit < &idx[size] && *lit && *rit) { lit -= step;rit += step; };
+				if ((rit >= &idx[size] || *rit) && *lit)
+				{
+					while (lit > idx && *lit) { lit -= step; };
+					assert(lit > idx && *lit == 0);
+				}
+			}
+			step >>= 1;//reset double step
+			//сдвиг элементов влево или вправо
+			if (rit < &idx[size] && *rit == 0)
+			{
+				lit = rit - step;
+				if (step == 1)::memmove(&idx[s + 1], &idx[s], (rit - &idx[s]) * sizeof(InxType));
+				else while (rit > &idx[s]) { *rit = *lit; rit -= step;lit -= step; }
+				if (key > d[idx[s]].key)s += step;
+			}
+			else
+			{
+				rit = lit + step;
+				if (step == 1)::memmove(lit, lit + 1, (&idx[s] - lit) * sizeof(InxType));
+				else while (lit < &idx[s]) { *lit = *rit;lit += step;rit += step; }
+				if (key < d[idx[s]].key)s -= step;
+			}
+		}
+		count++; d[count].key = key; d[count].val = val; idx[s] = count;
+		return true;
+	}
+public:
+	unsigned int count;
+	unsigned int capacity;
+	InxType  * inx;
+	ItemType * items;
+};
+//*/
+
+
+
+
+template <class ValueType, const unsigned int Capacity>
+class PlainArray
+{
+public:
+	PlainArray() { construct(); }
+	~PlainArray() { }
+	void construct() { ::memset(this, 0, sizeof(PlainArray)); }
+	void destruct() { }
+	inline bool get(const unsigned int i, ValueType& dst) { if (i >= Capacity)return false; dst = items[i]; return true; }
+	inline bool set(const unsigned int i, const ValueType& src) { if (i >= Capacity)return false; items[i] = src; return true; }
+	inline ValueType& operator[](unsigned int i) { return items[i]; }
+	ValueType items[Capacity];
+};
+template <const unsigned int Capacity>
+class PlainArray<bool, Capacity>
+{
+public:
+	PlainArray() { construct(); }
+	~PlainArray() { }
+	void construct() { ::memset(this, 0, sizeof(PlainArray)); }
+	void destruct() { }
+	inline bool get(const unsigned int i, bool& dst) { if (i >= Capacity)return false; dst = items[i >> 5] >> (i & 31); return true; }
+	inline bool set(const unsigned int i, const bool b) { if (i >= Capacity)return false; if (b)items[i >> 5] |= (1 << (i & 31));else items[i >> 5] &= ~(1 << (i & 31)); return true; }
+	inline bool operator[](unsigned int i) { return items[i >> 5] & (1 << (i & 31)); }
+	unsigned int items[(Capacity + 31) >> 5];
+};
+
+
+
+template <class ValueType, const int GrowFactor>
+class PlainVector
+{
+public:
+	PlainVector() { construct(); }
+	~PlainVector() { destruct(); }
+	void construct() { ::memset(this, 0, sizeof(PlainVector)); }
+	void destruct() {
+		if (items)MMG.free(items);/*items = 0;*/ }
+	//void destruct_obj() { for (unsigned int i = 0;i < size;i++) { items[i].destruct(); } if (items)MMG.free(items);items = 0; }//почему убрав "items = 0" вызывает ошибку памяти ??? потому что нужно вызывать items.destruct()
+	bool reserve() { unsigned int c = capacity; if (GrowFactor > 0)c += GrowFactor;else c *= -GrowFactor;void *p = MMG.realloc(items, c * sizeof(ValueType));if (p == 0)return false;capacity = c;items = (ValueType*)p;return true; }
+	inline bool push_back(const ValueType& v) { if (size >= capacity && !reserve())return false; items[size++] = v;return true; }
+	inline ValueType& operator[](unsigned int i) { return items[i]; }
+	unsigned int size;
+	unsigned int capacity;
+	ValueType* items;
+};
+template <const int GrowFactor>
+class PlainVector<bool, GrowFactor>
+{
+public:
+	PlainVector() { construct(); }
+	~PlainVector() { destruct(); }
+	void construct() { ::memset(this, 0, sizeof(PlainVector)); }
+	void destruct() { if (items)MMG.free(items);items = 0; }
+	bool reserve() { unsigned int c = capacity; if (GrowFactor > 0) c += GrowFactor; else c *= -GrowFactor;c = (c + 31)&~31;void *p = MMG.realloc(items, (c >> 5) * sizeof(unsigned int));if (p == 0)return false;capacity = c;items = (unsigned int*)p;return true; }
+	inline bool push_back(const bool b) { if (size >= capacity && !reserve())return false;if (b)items[size >> 5] |= (1 << (size & 31));else items[size >> 5] &= ~(1 << (size & 31));size++; return true; }
+	inline bool operator[](unsigned int i) { return items[i >> 5] & (1 << (i & 31)); }
+	unsigned int *items;
+	unsigned int size;
+	unsigned int capacity;
+};
+
+
+
+template <class ValueType>
+class PlainContainer16bit
+{
+	struct PlainContainer8bitPtr //для динамического создания объекта типа PlainContainer8bit
+	{
+		template <class ValueType>
+		class PlainContainer8bit
+		{
+		public:
+			PlainContainer8bit() { }
+			~PlainContainer8bit() { }
+			void construct() { items.construct();inx.construct();busy.construct(); }//for dynamic allocations
+			void destruct() { items.destruct(); inx.destruct(); busy.destruct(); }//for dynamic destructions
+			inline bool push_back(const unsigned char key, const ValueType& v) {
+				assert(busy[key] == 0);
+				return busy.set(key, true) && inx.set(key, items.size) && items.push_back(v);
+			}
+			PlainVector<ValueType, 32> items;
+			PlainArray<unsigned char, 256> inx;
+			PlainArray<bool, 256> busy;
+		};
+		void construct() { PlainContainer8bit<ValueType>* p = (PlainContainer8bit<ValueType>*)MMG.malloc(sizeof(PlainContainer8bit<ValueType>));if (p)p->construct();ptr = p; }
+		void destruct() { if (ptr) { ptr->destruct();MMG.free(ptr); ptr = 0; } }
+		PlainContainer8bit<ValueType>* ptr;
+	};
+	template <class ValueType, const int GrowFactor>
+	class PlainVector0
+	{
+	public:
+		PlainVector0() { construct(); }
+		~PlainVector0() { destruct(); }
+		void construct() { ::memset(this, 0, sizeof(PlainVector0)); }
+		void destruct() { if (items) { for (unsigned int i = 0;i < size;i++) { items[i].destruct(); } MMG.free(items);items = 0; } }
+		bool reserve() { unsigned int c = capacity; if (GrowFactor > 0)c += GrowFactor;else c *= -GrowFactor;void *p = MMG.realloc(items, c * sizeof(ValueType));if (p == 0)return false;capacity = c;items = (ValueType*)p;return true; }
+		inline bool push_back(const ValueType& v) { if (size >= capacity && !reserve())return false; items[size++] = v;return true; }
+		inline ValueType& operator[](unsigned int i) { return items[i]; }
+		unsigned int size;
+		unsigned int capacity;
+		ValueType* items;
+	};
+
+public:
+	typedef PlainContainer8bitPtr PC8;
+	PlainContainer16bit() { }
+	~PlainContainer16bit() { }
+	void construct() { items.construct();inx.construct();busy.construct(); }
+	void destruct() { items.destruct(); inx.destruct(); busy.destruct(); }
+	bool push_back(const unsigned short key, const ValueType& v)
+	{
+		unsigned char k1 = key >> 8, k0 = key & 255; PC8 p;
+		if (!busy[k1])
+		{
+			p.construct();if (!(p.ptr && busy.set(k1, true) && inx.set(k1, items.size) && items.push_back(p)))return false;
+		}
+		else p = items[inx[k1]];
+		return p.ptr->push_back(k0, v);
+	}
+	PlainVector0<PC8, 16> items;
+	PlainArray<unsigned char, 256> inx;
+	PlainArray<bool, 256> busy;
+};
+
+
+
+
+
+template <class KeyType, class ValueType>
+class BitMap256
+{
+public:
+	enum { Size = 256 };
+	typedef unsigned int FlagType;
+	BitMap256() { clear(); }
+	void clear() { ::memset(this, 0, sizeof(BitMap256)); }
+
+	bool insert(KeyType key, ValueType val)
+	{
+		assert(((busy[key >> 5] >> (key & 31)) & 1) == 0);
+		items[key] = val;busy[key >> 5] |= 1 << (key & 31);
+		return true;
+	}
+public:
+	FlagType busy[Size >> 5];
+	ValueType items[Size];
+	unsigned short count;
+};
+
+
+//простой массив item[key]=val
+template <class KeyType, class ValueType>
+class FixedSizeMap256
+{
+public:
+	enum { Size = 256 };
+	typedef unsigned int FlagType;
+	FixedSizeMap256() { clear(); }
+	void clear() { ::memset(this, 0, sizeof(FixedSizeMap256)); }
+
+	bool insert(KeyType key, ValueType val)
+	{
+		assert(((busy[key >> 5] >> (key & 31)) & 1) == 0);
+		items[key] = val;busy[key >> 5] |= 1 << (key & 31);
+		return true;
+	}
+public:
+	FlagType busy[Size >> 5];
+	ValueType items[Size];
+};
+
+
+
+template <class T, unsigned int Bits>
+class FixTree
+{
+public:
+	typedef unsigned char InxType;
+	const enum { Size = (1 << Bits) - 1 };
+	FixTree() { clear(); }
+	void clear() { ::memset(this, 0, sizeof(FixTree)); }
+
+	bool insert(T item)
+	{
+		if (count >= Size)return false;
+		//item *= 94967651;//hashing key
+		//для обнаружения в inx незанятой ячейки нумерацию будем вести начиная с 1
+		//указатель на массив items следует сместить на 1
+		T *d = items - 1; InxType *idx = inx - 1;
+		unsigned int size = Size + 1, s = size >> 1, step = s, sz = (count + 1) >> 1;
+		//спуск на нижний уровень
+		while (sz)
+		{
+			assert(item != d[idx[s]]);
+			sz >>= 1;step >>= 1; if (item < d[idx[s]])s -= step;else s += step;
+		}
+		if (idx[s])
+		{
+			step <<= 1;//set double step for search the empty element
+			//поиск ближайшего пустого слева или справа на текущем уровне
+			InxType *lit, *rit; lit = rit = &idx[s];
+			if (s < (size >> 1))
+			{
+				while (lit > idx && *lit && *rit) { lit -= step;rit += step; };
+				if ((lit <= idx || *lit) && *rit)
+				{
+					while (rit < &idx[size] && *rit) { rit += step; };
+					assert(rit < &idx[size] && *rit == 0);
+				}
+			}
+			else
+			{
+				while (rit < &idx[size] && *lit && *rit) { lit -= step;rit += step; };
+				if ((rit >= &idx[size] || *rit) && *lit)
+				{
+					while (lit > idx && *lit) { lit -= step; };
+					assert(lit > idx && *lit == 0);
+				}
+			}
+			step >>= 1;//reset double step
+			//сдвиг элементов влево или вправо
+			if (rit < &idx[size] && *rit == 0)
+			{
+				lit = rit - step;
+				if (step == 1)::memmove(&idx[s + 1], &idx[s], (rit - &idx[s]) * sizeof(InxType));
+				else while (rit > &idx[s]) { *rit = *lit; rit -= step;lit -= step; }
+				if (item > d[idx[s]])s += step;
+			}
+			else
+			{
+				rit = lit + step;
+				if (step == 1)::memmove(lit, lit + 1, (&idx[s] - lit) * sizeof(InxType));
+				else while (lit < &idx[s]) { *lit = *rit;lit += step;rit += step; }
+				if (item < d[idx[s]])s -= step;
+			}
+		}
+		items[count++] = item;idx[s] = count;
+		return true;
+	}
+public:
+	T items[Size];
+	InxType inx[Size];
+	unsigned int count;
+};
+
+
+
+
+
+
+
+//template <class T, unsigned int Bits>
+//class FixTree
+//{
+//public:
+//	const enum { Size = (1 << Bits) - 1 };
+//	FixTree() { clear(); }
+//	void clear() { count = 0; ::memset(items, 0, Size * sizeof(T)); }
+//
+//	bool insert(T item)
+//	{
+//		if (count >= Size)return false;
+//		//item *= 94967651;//hashing key
+//		T *d = items - 1;
+//		unsigned int size = Size + 1, s = size >> 1, step = s, sz = (count + 1) >> 1;
+//		//спуск на нижний уровень
+//		while(sz)
+//		{
+//			assert(item != d[s]);
+//			sz >>= 1;step >>= 1; if (item < d[s])s -= step;else s += step;
+//		}
+//		if (d[s])
+//		{
+//			step <<= 1;//set double step for search the empty element
+//			//поиск ближайшего пустого слева или справа на текущем уровне
+//			T *lit, *rit; lit = rit = &d[s];
+//			if (s < (size >> 1))
+//			{
+//				while (lit > d && *lit && *rit) { lit -= step;rit += step; };
+//				if ((lit <= d || *lit) && *rit)
+//				{
+//					while (rit < &d[size] && *rit) { rit += step; };
+//					assert(rit < &d[size] && *rit == 0);
+//				}
+//			}
+//			else
+//			{
+//				while (rit < &d[size] && *lit && *rit) { lit -= step;rit += step; };
+//				if ((rit >= &d[size] || *rit) && *lit)
+//				{
+//					while (lit > d && *lit) { lit -= step; };
+//					assert(lit > d && *lit == 0);
+//				}
+//			}
+//			step >>= 1;//reset double step
+//			//сдвиг элементов влево или вправо
+//			if (rit < &d[size] && *rit == 0)
+//			{
+//				lit = rit - step;
+//				if (step == 1)::memmove(&d[s + 1], &d[s], (rit - &d[s]) * sizeof(T));
+//				else while (rit > &d[s]) { *rit = *lit; rit -= step;lit -= step; }
+//				if (item > d[s])s += step;
+//			}
+//			else
+//			{
+//				rit = lit + step;
+//				if (step == 1)::memmove(lit, lit + 1, (&d[s] - lit) * sizeof(T));
+//				else while (lit < &d[s]) { *lit = *rit;lit += step;rit += step; }
+//				if (item < d[s])s -= step;
+//			}
+//		}
+//		d[s] = item; count++;
+//		return true;
+//	}
+//public:
+//	T items[Size];
+//	unsigned int count;
+//};
+
+
+
+
+
+
+
+
+
+
 
 /*
 class HashMap
@@ -1938,10 +2547,10 @@ template<class T, const uint32_t Capacity>
 struct VecC
 {
 	typedef struct { uint8_t inext; } I;
-	VecC() noexcept : count(0), imin(0), imax(0) {};
+	VecC() noexcept : count(0)/*, imin(0), imax(0)*/ {};
 	bool insert(T v) noexcept
 	{
-		int i, j, j1;
+		int i, j, j1; uint8_t &imin = inx2[0], &imax = inx2[16];
 		if (count >= Capacity) return false;
 		i = count++; vals[i] = v;
 		if (i == 0)return true;
@@ -1951,24 +2560,94 @@ struct VecC
 			j = j1 = imin;while (v >= vals[j]) { j1 = j;j = inx[j].inext; }
 			inx[i].inext = j;inx[j1].inext = i;
 		}
+
+
+		//inx2 = [ imin+0,  imin+16, imin+32, imin+48, imin+64,  imin+80, imin+96, imin+112,
+		//         imin+128,imin+144,imin+160,imin+176,imin+192, imin+208,imin+224,imin+240  ]
+		//
+		//1) при вставке нового value для ускорения поиска положения вставки
+		//   используем вспомогательную индексацию состоящую из 16 индексов,
+		//   равномерно распределенные на всей длине vector of values
+		//2) при поиске положения вставки будем использовать бинарный поиск
+		//3) при нахождении интервала производим локальный поиск внутри него
+		//4) выполнив вставку, следует далее скорректировать положение следующего
+		//   вспомогательного индекса, чтобы он отстоял от начала интервала на 16
+		//
+		//
+		// Для Capacity=255 интервал индексации возьмем равным 16.
+		// Тогда интервалов будет 16 и понадобится 17 индексов,
+		// где i0 = imin, i16 = imax
+		//
+		// Init indexes:
+		if (count < Capacity) return true;
+		if (count >= Capacity)
+		{
+			j = imin;for (i = 1;i < 16;i++){for (j1 = 0;j1 < 16;j1++) { j = inx[j].inext; } inx2[i] = j;}
+			//printf("[");
+			//for (i = imin;i != inx[i].inext;i = inx[i].inext)printf("(%i,%i),", vals[i], i);printf("(%i,%i)", vals[i], i);
+			//printf("]\n");
+			//for (i = 0;i < 17;i++) { printf("%i) i2 = %i, val=%i\n", i, inx2[i], vals[inx2[i]]); }
+
+		}
 		return true;
 	};
 	T replace_min(T v) noexcept
 	{
+		uint8_t &imin = inx2[0], &imax = inx2[16];
 		int i = imin, j, j1;
-		T v1 = vals[i];vals[i] = v;imin = inx[i].inext;
-		if (v <= vals[imin]) { inx[i].inext = imin;imin = i; }
-		else if (v >= vals[imax]) { inx[i].inext = inx[imax].inext = i;imax = i; }
-		else {
-			j = j1 = imin;while (v >= vals[j]) { j1 = j;j = inx[j].inext; }
-			inx[i].inext = j;inx[j1].inext = i;
+		T v1 = vals[i];vals[i] = v;imin = inx[i].inext; //!!! 2.2 sec for 500000 (5.7 sec for all)
+		if (imin == inx2[1])
+		{
+			//j = imin;for (j1 = 1;j1 < 255;j1++) { j = inx[j].inext;if ((j1 & 15) == 0)inx2[j1 >> 4] = j; }
+			uint8_t *p = &inx2[2],*p1=&inx2[1];for (j = 1;j < 15;j++)*p1++ = *p++;//!!! 1.5 sec for 500000 (5.7 sec for all)
+			inx2[15] = inx[inx2[15]].inext;
+		}
+		if (v <= vals[imin]){ inx[i].inext = imin;imin = i; }
+		else
+		{
+			if (v >= vals[imax])
+			{
+				inx[i].inext = inx[imax].inext = i;imax = i;
+				//correction 2-level indexses
+				//for (i = 1;i < 16;i++) { inx2[i] = inx[inx2[i]].inext; }
+			}
+			else
+			{
+				//binary tree search of the initial index
+				//                         |
+				//             |           |           |
+				// |     |     |     |     |     |     |     |     |
+				// |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |  |
+				// 0  1  2  3  4  5  6  7  8  9  10 11 12 13 14 15 16
+				int i2;
+				if (v >= vals[inx2[8]])
+				{
+					if (v >= vals[inx2[12]]) { if (v >= vals[inx2[14]]) { if (v >= vals[inx2[15]]) i2 = 15;else i2 = 14; } else { if (v >= vals[inx2[13]]) i2 = 13;else i2 = 12; } }
+					else { if (v >= vals[inx2[10]]) { if (v >= vals[inx2[11]]) i2 = 11;else i2 = 10; } else { if (v >= vals[inx2[9]]) i2 = 9;else i2 = 8; } }
+				}
+				else
+				{
+					if (v >= vals[inx2[4]]) { if (v >= vals[inx2[6]]) { if (v >= vals[inx2[7]]) i2 = 7;else i2 = 6; } else { if (v >= vals[inx2[5]]) i2 = 5;else i2 = 4; } }
+					else { if (v >= vals[inx2[2]]) { if (v >= vals[inx2[3]]) i2 = 3;else i2 = 2; } else { if (v >= vals[inx2[1]]) i2 = 1;else i2 = 0; } }
+				}
+				//search within the previously obtained interval
+				j = j1 = inx2[i2];while (v >= vals[j]) { j1 = j;j = inx[j].inext; }
+
+				//j = j1 = imin;while (v >= vals[j]) { j1 = j;j = inx[j].inext; }
+				inx[i].inext = j;inx[j1].inext = i;
+
+				//correction 2-level indexses
+				//if(i2>0)for (i = 1;i <= i2;i++){inx2[i] = inx[inx2[i]].inext;}
+			}
+			//for (i = 0;i < 17;i++){printf("%i) i2 = %i, val=%i\n", i, inx2[i], vals[inx2[i]]);}
 		}
 		return v1;
 	};
 	uint8_t count;		//number inserted elements in [keys]
-	uint8_t imin;		//index of min key
-	uint8_t imax;		//index of max key
 	uint8_t stub;		//reserved field
+	//uint8_t imin;		//index of min key
+	//uint8_t imax;		//index of max key
+	uint8_t inx2[17];	//vector of evenly spaced 2-level indexes
 	I inx[Capacity];	//vector of indices of the next (larger) elements
 	T vals[Capacity];	//vector of keys
 	VecC* prev;
@@ -1980,17 +2659,35 @@ class LList
 {
 public:
 	typedef VecC<T, NodeCapacity> V;
-	LList() : first(0), last(0) {}
+	LList() : first(0), last(0) { ::memset(inx2, 0, sizeof(inx2)); count = 0; }
 	~LList() {}
-	void* allocate_node() { void *p = MMG.malloc(sizeof(V));if (p)::memset(p, 0, sizeof(V));return p; }
+	void* allocate_node() { void *p = MMG.malloc(sizeof(V));if (p)::memset(p, 0, sizeof(V));if (count == 0)inx2[0] = (V*)p;count++;
+	if ((count & 15) == 0)
+		inx2[count >> 4] = (V*)p;
+	return p; }
 	bool insert(T v)
 	{
-		if (first == 0) { if (!(first = (V*)allocate_node())) return false; last = first; }
-		V *p = last;
-		while (p->prev != 0 && v < p->vals[p->imin]) { p = p->prev; }
+		if (first == 0) { if (!(last = (V*)allocate_node())) return false; first = last; }
+		V *p = last; int i = 32;
+		//while (p->prev != 0 && v < p->vals[p->inx2[0]]) { p = p->prev; } //!!! 90% busy
+		
+		int j;for (j = 0;j < (count >> 4);j++)
+		{
+			if (v < inx2[j]->vals[inx2[j]->inx2[0]])
+				continue;
+			if(j)j--;break;
+		}
+		p = inx2[j];j = 0;
+		while (p->prev != 0 && v < p->vals[p->inx2[0]])
+		{
+			p = p->prev;j++;
+		}
+		//printf("j=%i\n", j);
+		
 		while (1)
 		{
 			if (p->count < NodeCapacity)break;
+			//if (i-- == 0){p1 = p;if (!(p = (V*)allocate_node())) return false;p->prev = p1->prev;p1->prev = p;break;}
 			//если блок полный, то переносим min value в предыдущий блок,
 			//а на его место сохраним v
 			v = p->replace_min(v);
@@ -2022,6 +2719,8 @@ public:
 public:
 	V * first;
 	V * last;
+	V * inx2[5024];
+	int count;
 };
 
 
