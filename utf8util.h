@@ -2130,10 +2130,8 @@ template <class ValueType, const unsigned int Capacity>
 class PlainArray
 {
 public:
-	PlainArray() { construct(); }
+	PlainArray() { ::memset(this, 0, sizeof(PlainArray)); }
 	~PlainArray() { }
-	void construct() { ::memset(this, 0, sizeof(PlainArray)); }
-	void destruct() { }
 	inline bool get(const unsigned int i, ValueType& dst) { if (i >= Capacity)return false; dst = items[i]; return true; }
 	inline bool set(const unsigned int i, const ValueType& src) { if (i >= Capacity)return false; items[i] = src; return true; }
 	inline ValueType& operator[](unsigned int i) { return items[i]; }
@@ -2143,28 +2141,21 @@ template <const unsigned int Capacity>
 class PlainArray<bool, Capacity>
 {
 public:
-	PlainArray() { construct(); }
+	PlainArray() { ::memset(this, 0, sizeof(PlainArray)); }
 	~PlainArray() { }
-	void construct() { ::memset(this, 0, sizeof(PlainArray)); }
-	void destruct() { }
 	inline bool get(const unsigned int i, bool& dst) { if (i >= Capacity)return false; dst = items[i >> 5] >> (i & 31); return true; }
 	inline bool set(const unsigned int i, const bool b) { if (i >= Capacity)return false; if (b)items[i >> 5] |= (1 << (i & 31));else items[i >> 5] &= ~(1 << (i & 31)); return true; }
-	inline bool operator[](unsigned int i) { return items[i >> 5] & (1 << (i & 31)); }
+	inline bool operator[](const unsigned int i) { return items[i >> 5] & (1 << (i & 31)); }
 	unsigned int items[(Capacity + 31) >> 5];
 };
 
 
-
-template <class ValueType, const int GrowFactor>
+template <class ValueType, const int GrowFactor, const bool isValueDestructable = false>
 class PlainVector
 {
 public:
-	PlainVector() { construct(); }
-	~PlainVector() { destruct(); }
-	void construct() { ::memset(this, 0, sizeof(PlainVector)); }
-	void destruct() {
-		if (items)MMG.free(items);/*items = 0;*/ }
-	//void destruct_obj() { for (unsigned int i = 0;i < size;i++) { items[i].destruct(); } if (items)MMG.free(items);items = 0; }//почему убрав "items = 0" вызывает ошибку памяти ??? потому что нужно вызывать items.destruct()
+	PlainVector() { ::memset(this, 0, sizeof(PlainVector)); }
+	~PlainVector() { if (isValueDestructable && size) { for (unsigned int i = 0;i < size;i++)items[i].~ValueType(); } if (items)MMG.free(items); }
 	bool reserve() { unsigned int c = capacity; if (GrowFactor > 0)c += GrowFactor;else c *= -GrowFactor;void *p = MMG.realloc(items, c * sizeof(ValueType));if (p == 0)return false;capacity = c;items = (ValueType*)p;return true; }
 	inline bool push_back(const ValueType& v) { if (size >= capacity && !reserve())return false; items[size++] = v;return true; }
 	inline ValueType& operator[](unsigned int i) { return items[i]; }
@@ -2173,19 +2164,44 @@ public:
 	ValueType* items;
 };
 template <const int GrowFactor>
-class PlainVector<bool, GrowFactor>
+class PlainVector<bool, GrowFactor, false>
 {
 public:
-	PlainVector() { construct(); }
-	~PlainVector() { destruct(); }
-	void construct() { ::memset(this, 0, sizeof(PlainVector)); }
-	void destruct() { if (items)MMG.free(items);items = 0; }
+	PlainVector() { ::memset(this, 0, sizeof(PlainVector)); }
+	~PlainVector() { if (items)MMG.free(items); }
 	bool reserve() { unsigned int c = capacity; if (GrowFactor > 0) c += GrowFactor; else c *= -GrowFactor;c = (c + 31)&~31;void *p = MMG.realloc(items, (c >> 5) * sizeof(unsigned int));if (p == 0)return false;capacity = c;items = (unsigned int*)p;return true; }
 	inline bool push_back(const bool b) { if (size >= capacity && !reserve())return false;if (b)items[size >> 5] |= (1 << (size & 31));else items[size >> 5] &= ~(1 << (size & 31));size++; return true; }
 	inline bool operator[](unsigned int i) { return items[i >> 5] & (1 << (i & 31)); }
-	unsigned int *items;
 	unsigned int size;
 	unsigned int capacity;
+	unsigned int *items;
+};
+template<class T>
+class unique_ptr
+{
+public:
+	unique_ptr() noexcept : ptr(0) {}
+	unique_ptr(void* p) noexcept : ptr(p) {}
+	unique_ptr(unique_ptr& uptr) = delete;
+	unique_ptr(const unique_ptr& uptr) = delete;
+	unique_ptr(unique_ptr&& uptr) = delete;
+	~unique_ptr() noexcept { if (ptr) delete (T*)ptr; }
+	inline unique_ptr& copy(unique_ptr& uptr) { ptr = uptr.ptr;return *this; }
+	inline unique_ptr& copy(const unique_ptr& uptr) { ptr = uptr.ptr;return *this; }
+	inline unique_ptr& operator =(unique_ptr& uptr) noexcept { ptr = uptr.ptr;uptr.ptr = 0;return *this; }
+	inline unique_ptr& operator =(const unique_ptr& uptr) noexcept { ptr = uptr.ptr;((unique_ptr&)uptr).ptr = 0;return *this; }
+	inline unique_ptr& operator =(unique_ptr&& uptr) noexcept { ptr = uptr.ptr;uptr.ptr = 0;return *this; }
+	inline unique_ptr& operator =(const unique_ptr&& uptr) noexcept { ptr = uptr.ptr;((unique_ptr&)uptr).ptr = 0;return *this; }
+	//inline bool operator ==(const void* p) noexcept { return p == ptr; }
+	//inline bool operator !=(const void* p) noexcept { return p != ptr; }
+	inline bool operator !() noexcept { return ptr == 0; }
+	inline operator bool() noexcept { return ptr != 0; }
+	//inline T* operator ->() noexcept { return (T*)ptr; }
+	inline operator T*() noexcept { return (T*)ptr; }
+	//void construct() { T* p = (T*)MMG.malloc(sizeof(T));if (p) new(p)T();ptr = p; }
+	//void destruct() {if (ptr){ ((T*)ptr)->~T();MMG.free(ptr);ptr = 0; } }
+private:
+	void* ptr;
 };
 
 
@@ -2193,111 +2209,52 @@ public:
 template <class ValueType>
 class PlainContainer16bit
 {
-	struct PlainContainer8bitPtr //для динамического создания объекта типа PlainContainer8bit
-	{
-		template <class ValueType>
-		class PlainContainer8bit
-		{
-		public:
-			PlainContainer8bit() { }
-			~PlainContainer8bit() { }
-			void construct() { items.construct();inx.construct();busy.construct(); }//for dynamic allocations
-			void destruct() { items.destruct(); inx.destruct(); busy.destruct(); }//for dynamic destructions
-			inline bool push_back(const unsigned char key, const ValueType& v) {
-				assert(busy[key] == 0);
-				return busy.set(key, true) && inx.set(key, items.size) && items.push_back(v);
-			}
-			PlainVector<ValueType, 32> items;
-			PlainArray<unsigned char, 256> inx;
-			PlainArray<bool, 256> busy;
-		};
-		void construct() { PlainContainer8bit<ValueType>* p = (PlainContainer8bit<ValueType>*)MMG.malloc(sizeof(PlainContainer8bit<ValueType>));if (p)p->construct();ptr = p; }
-		void destruct() { if (ptr) { ptr->destruct();MMG.free(ptr); ptr = 0; } }
-		PlainContainer8bit<ValueType>* ptr;
-	};
-	template <class ValueType, const int GrowFactor>
-	class PlainVector0
+
+	template <class ValueType>
+	class PlainContainer8bit
 	{
 	public:
-		PlainVector0() { construct(); }
-		~PlainVector0() { destruct(); }
-		void construct() { ::memset(this, 0, sizeof(PlainVector0)); }
-		void destruct() { if (items) { for (unsigned int i = 0;i < size;i++) { items[i].destruct(); } MMG.free(items);items = 0; } }
-		bool reserve() { unsigned int c = capacity; if (GrowFactor > 0)c += GrowFactor;else c *= -GrowFactor;void *p = MMG.realloc(items, c * sizeof(ValueType));if (p == 0)return false;capacity = c;items = (ValueType*)p;return true; }
-		inline bool push_back(const ValueType& v) { if (size >= capacity && !reserve())return false; items[size++] = v;return true; }
-		inline ValueType& operator[](unsigned int i) { return items[i]; }
-		unsigned int size;
-		unsigned int capacity;
-		ValueType* items;
+		PlainContainer8bit() { }
+		~PlainContainer8bit() { }
+		static void* operator new(size_t count) noexcept { return MMG.malloc(count); }
+		static void operator delete(void* p) noexcept { MMG.free(p); }
+		inline bool push_back(const unsigned char key, const ValueType& v) {
+			assert(items.size == 0 || key != inx0 && inx[key] == 0);
+			if (items.size == 0)inx0 = key;
+			return inx.set(key, items.size) && items.push_back(v);
+		}
+		PlainVector<ValueType, 32> items;
+		PlainArray<unsigned char, 256> inx;
+		unsigned char inx0;
 	};
 
 public:
-	typedef PlainContainer8bitPtr PC8;
+	typedef PlainContainer8bit<ValueType> PC8;
+	typedef unique_ptr<PC8> UPtr;
 	PlainContainer16bit() { }
 	~PlainContainer16bit() { }
-	void construct() { items.construct();inx.construct();busy.construct(); }
-	void destruct() { items.destruct(); inx.destruct(); busy.destruct(); }
 	bool push_back(const unsigned short key, const ValueType& v)
 	{
-		unsigned char k1 = key >> 8, k0 = key & 255; PC8 p;
-		if (!busy[k1])
+		unsigned char k1 = key >> 8, k0 = key & 255; PC8* p;
+		if (inx[k1] != 0 || items.size != 0 && k1 == inx0)p = (PC8*)items[inx[k1]];
+		else
 		{
-			p.construct();if (!(p.ptr && busy.set(k1, true) && inx.set(k1, items.size) && items.push_back(p)))return false;
+			if (items.size == 0)inx0 = k1;p = new PC8();
+			if (p == 0 || !inx.set(k1, items.size) || !items.push_back(UPtr(p)))return false;
 		}
-		else p = items[inx[k1]];
-		return p.ptr->push_back(k0, v);
+		return p->push_back(k0, v);
 	}
-	PlainVector0<PC8, 16> items;
+	PlainVector<UPtr, 16, true> items;
 	PlainArray<unsigned char, 256> inx;
-	PlainArray<bool, 256> busy;
+	unsigned char inx0;
 };
 
 
 
 
 
-template <class KeyType, class ValueType>
-class BitMap256
-{
-public:
-	enum { Size = 256 };
-	typedef unsigned int FlagType;
-	BitMap256() { clear(); }
-	void clear() { ::memset(this, 0, sizeof(BitMap256)); }
-
-	bool insert(KeyType key, ValueType val)
-	{
-		assert(((busy[key >> 5] >> (key & 31)) & 1) == 0);
-		items[key] = val;busy[key >> 5] |= 1 << (key & 31);
-		return true;
-	}
-public:
-	FlagType busy[Size >> 5];
-	ValueType items[Size];
-	unsigned short count;
-};
 
 
-//простой массив item[key]=val
-template <class KeyType, class ValueType>
-class FixedSizeMap256
-{
-public:
-	enum { Size = 256 };
-	typedef unsigned int FlagType;
-	FixedSizeMap256() { clear(); }
-	void clear() { ::memset(this, 0, sizeof(FixedSizeMap256)); }
-
-	bool insert(KeyType key, ValueType val)
-	{
-		assert(((busy[key >> 5] >> (key & 31)) & 1) == 0);
-		items[key] = val;busy[key >> 5] |= 1 << (key & 31);
-		return true;
-	}
-public:
-	FlagType busy[Size >> 5];
-	ValueType items[Size];
-};
 
 
 
