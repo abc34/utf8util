@@ -2018,10 +2018,10 @@ public:
 
 
 
-//TODO: сделать вставку в сегменты по 16 (для 4 мл.бит ключа)
-//      вставка по индексу key&15 делается масимально быстро
-//      упорядочивать только номера сегментов
-//TODO: учесть конструктор и деструктор ValueType
+//TODO: использовать объединение ключей отличающиеся на 1
+//      В этом случае вместо индексов на {key,val} будут индексы на {key,val0,val1,...}
+//      и соответствующие индексы на ключи key+1,key+2... будут удалены из индексов.
+
 
 
 template <class KeyType, class ValType, const unsigned int InxBits>
@@ -2037,18 +2037,23 @@ public:
 		//static_assert(GroupCapacity <= 32 && "busy is less or equal to 32 bits");
 		enum { GroupBytes = GroupCapacity * sizeof(V) };
 		typedef struct { K key; V vals[GroupCapacity]; unsigned int busy; } ItemType;
-		template<const bool>inline void construct(ItemType*, ItemType*) noexcept {}
-		template<> inline void construct<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)new(first)ItemType(); }
-		template<const bool>inline void destruct(ItemType*, ItemType*) noexcept {}
-		template<> inline void destruct<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first) first->~ItemType(); }
+		
+		template<const bool>inline void construct1(ItemType*, ItemType*) noexcept {}
+		template<> inline void construct1<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)new(first)ItemType(); }
+		inline void construct(ItemType* first, ItemType* last) noexcept { construct1<__is_trivially_constructible(ItemType)>(first, last); }
+
+		template<const bool>inline void destruct1(ItemType*, ItemType*) noexcept {}
+		template<> inline void destruct1<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)first->~ItemType(); }
+		inline void destruct(ItemType* first, ItemType* last) noexcept { destruct1<__is_trivially_destructible(ItemType)>(first, last); }
+		
 		ContainerT() noexcept { ::memset(this, 0, sizeof(ContainerT)); }
 		~ContainerT() noexcept {
-			destruct< __is_trivially_destructible(ItemType)>(items, items + capacity);
+			destruct(items, items + capacity);
 			if (items)MMG.free(items);
 		}
 		bool reserve_items() noexcept {
 			const unsigned int c = capacity + 4; void* p = MMG.realloc(items, c * sizeof(ItemType));if (p == 0) return false;items = (ItemType*)p;
-			construct< __is_trivially_constructible(ItemType)>(items + capacity, items + c);
+			construct(items + capacity, items + c);
 			capacity = c;
 			return true;
 		}
@@ -2071,18 +2076,23 @@ public:
 	struct ContainerT<K,V,1>
 	{
 		typedef struct { K key; V vals[1]; } ItemType;
-		template<const bool>inline void construct(ItemType*, ItemType*) noexcept {}
-		template<> inline void construct<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)new(first)ItemType(); }
-		template<const bool>inline void destruct(ItemType*, ItemType*) noexcept {}
-		template<> inline void destruct<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first) first->~ItemType(); }
+		
+		template<const bool>inline void construct1(ItemType*, ItemType*) noexcept {}
+		template<> inline void construct1<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)new(first)ItemType(); }
+		inline void construct(ItemType* first, ItemType* last) noexcept { construct1<__is_trivially_constructible(ItemType)>(first, last); }
+
+		template<const bool>inline void destruct1(ItemType*, ItemType*) noexcept {}
+		template<> inline void destruct1<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)first->~ItemType(); }
+		inline void destruct(ItemType* first, ItemType* last) noexcept { destruct1<__is_trivially_destructible(ItemType)>(first, last); }
+
 		ContainerT() noexcept { ::memset(this, 0, sizeof(ContainerT)); }
 		~ContainerT() noexcept {
-			destruct< __is_trivially_destructible(ItemType)>(items, items + capacity);
+			destruct(items, items + capacity);
 			if (items)MMG.free(items);
 		}
 		bool reserve_items() noexcept {
 			unsigned int c = capacity + 4; void* p = MMG.realloc(items, c * sizeof(ItemType));if (p == 0) return false;items = (ItemType*)p;
-			construct< __is_trivially_constructible(ItemType)>(items + capacity, items + c);
+			construct(items + capacity, items + c);
 			capacity = c;
 			return true;
 		}
@@ -2318,7 +2328,7 @@ public:
 // - делать динамический массив в виде связанных блоков не целесообразно из-за накладных расходов,
 //   значительно проще использовать realloc(new size);
 
-//TODO: use compiler intrinsic: __is_trivially_constructible(T) and __is_trivially_destructible(T)
+//use compiler intrinsic: __is_trivially_constructible(T) and __is_trivially_destructible(T)
 //template<typename Ty> constexpr bool is_pod() noexcept { return false; }
 //template<> constexpr bool is_pod<bool>() noexcept { return true; }
 //template<> constexpr bool is_pod<char>() noexcept { return true; }
@@ -2341,13 +2351,12 @@ public:
 
 
 
+//TODO: PlainArray: need initialize items on constructor ??? - Если есть конструктор, то вызывается он. Иначе force clear to 0.
 template <class ItemType, const unsigned int Capacity>
 class PlainArray
 {
-	template<const bool>inline void construct() noexcept {}
-	template<> inline void construct<true>() noexcept { ::memset(this, 0, sizeof(PlainArray)); }
 public:
-	PlainArray() noexcept { construct<__is_trivially_constructible(ItemType)>(); }
+	PlainArray() noexcept { if (__is_trivially_constructible(ItemType))::memset(this, 0, sizeof(PlainArray)); }
 	~PlainArray() {}
 	//static void* operator new(size_t count) noexcept { return MMG.malloc(count); }
 	//static void operator delete(void* p) noexcept { MMG.free(p); }
@@ -2370,51 +2379,53 @@ public:
 	unsigned int items[(Capacity + 31) >> 5];
 };
 
+//TODO: const qualifier arguments and functions ???
+//TODO: need initialize items on reserve ??? - No. Initialize elements when resizing.
 template <class ItemType, const int GrowFactor = 16>
 class PlainVector
 {
 private:
-	template<const bool>inline void construct(ItemType*, ItemType*) noexcept {}
-	template<> inline void construct<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first)new(first)ItemType(); }
-	template<const bool>inline void destruct(ItemType*, ItemType*) noexcept {}
-	template<> inline void destruct<false>(ItemType* first, ItemType* last) noexcept { for (;first != last;++first) first->~ItemType(); }
-	bool reserve_items() noexcept { unsigned int c = capacity; if (GrowFactor >= 0)c += GrowFactor;else c *= -GrowFactor;return reserve(c); }
+	template<typename Ty> class _Allocator
+	{
+	public:
+		template<const bool b = __is_trivially_constructible(Ty)>inline void construct(Ty*, Ty*) noexcept {}
+		template<> inline void construct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)new(first)Ty(); }
+		template<> inline void construct<true>(Ty*, Ty*) noexcept {}
+		template<const bool b = __is_trivially_constructible(Ty)>inline void construct(Ty*, Ty*, const Ty&) noexcept {}
+		template<> inline void construct<false>(Ty* first, Ty* last, const Ty& val) noexcept { for (;first != last;++first)new(first)Ty(val); }
+		template<> inline void construct<true>(Ty* first, Ty* last, const Ty& val) noexcept { const Ty* src = first;unsigned int n = 4;if (first < last) *first++ = val;if (first < last) *first++ = val;if (first < last) *first++ = val;if (first < last) *first++ = val;while (last - first >= n) { ::memcpy(first, src, n * sizeof(Ty));first += n;n += n; }if (first != last) { ::memcpy(first, src, (last - first) * sizeof(Ty)); } }
+		template<const bool b = __is_trivially_destructible(Ty)>inline void destruct(Ty*, Ty*) noexcept {}
+		template<> inline void destruct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)first->~Ty(); }
+		template<> inline void destruct<true>(Ty*, Ty*) noexcept {}
+		bool inline allocate(Ty** ptr, unsigned int& capacity, const unsigned int new_capacity) { if (new_capacity != capacity) { void *p = MMG.realloc(*ptr, new_capacity * sizeof(Ty));if (p == 0 && new_capacity != 0)return false;*ptr = (Ty*)p;capacity = new_capacity; }return true; }
+		inline void deallocate(Ty** ptr) { MMG.free(*ptr);*ptr = 0; }
+		template<const bool b = __is_trivially_constructible(Ty)> inline void fill(Ty*, Ty*, const Ty&) noexcept {}
+		template<> inline void fill<false>(Ty* first, Ty* last, const Ty& val) noexcept { while (first != last)*first++ = val; }
+		template<> inline void fill<true>(Ty* first, Ty* last, const Ty& val) noexcept { construct<true>(first, last, val); }
+		template<const bool b = __is_trivially_constructible(Ty)> inline void construct_uninitialized_item(Ty*) noexcept {}
+		template<> inline void construct_uninitialized_item<false>(Ty* items) noexcept { new(items)Ty(); }
+		template<> inline void construct_uninitialized_item<true>(Ty* items) noexcept {}
+	};
+	_Allocator<ItemType> _alloc;
+	//void* operator new(size_t count) noexcept { return MMG.malloc(count); }
+	//void operator delete(void* p) noexcept { MMG.free(p); }
 public:
-	PlainVector() noexcept { ::memset(this, 0, sizeof(PlainVector)); }
-	PlainVector(const unsigned int count) noexcept { resize(count); }
-	~PlainVector()
+	PlainVector() noexcept : size(0), capacity(0), items(0) {}
+	PlainVector(const unsigned int count) noexcept : PlainVector() { resize(count); }
+	PlainVector(const unsigned int count, ItemType&& val) noexcept : PlainVector() { resize(count, val); }
+	PlainVector(const unsigned int count, const ItemType& val) noexcept : PlainVector() { resize(count, val); }
+	~PlainVector() { if (items) { _alloc.destruct(items, items + size);_alloc.deallocate(&items); } }
+	bool reserve(const unsigned int new_cap) noexcept { return new_cap <= capacity || _alloc.allocate(&items, capacity, new_cap); }
+	bool resize(const unsigned int new_size) noexcept { if (size != new_size) { if (new_size < size) { _alloc.destruct(items + new_size, items + size); } else { if (!reserve(new_size))return false; _alloc.construct(items + size, items + new_size); }size = new_size; }return true; }
+	bool resize(const unsigned int new_size, const ItemType& val) noexcept { if (size != new_size) { if (new_size < size) { _alloc.destruct(items + new_size, items + size); } else { if (!reserve(new_size))return false; _alloc.construct(items + size, items + new_size, val); } size = new_size; }return true; }
+	bool shrink_to_fit() noexcept { return _alloc.allocate(&items, capacity, size); }
+	void fill(const ItemType& val) noexcept { _alloc.fill(items, items + size, val); }
+	inline bool push_back(const ItemType& val) noexcept
 	{
-		destruct<__is_trivially_destructible(ItemType)>(items, items + capacity);
-		if (items)MMG.free(items);
-	}
-	//static void* operator new(size_t count) noexcept { return MMG.malloc(count); }
-	//static void operator delete(void* p) noexcept { MMG.free(p); }
-	bool reserve(const unsigned int new_cap) noexcept
-	{
-		if (new_cap > capacity)
-		{
-			void *p = MMG.realloc(items, new_cap * sizeof(ItemType));if (p == 0)return false;items = (ItemType*)p;
-			construct<__is_trivially_constructible(ItemType)>(items + capacity, items + new_cap);
-			//::memset(items + capacity, 0, (new_size - capacity) * sizeof(ItemType));
-			capacity = new_cap;
-		}
+		if (size >= capacity && !reserve(capacity + GrowFactor))return false;
+		_alloc.construct_uninitialized_item(items + size); items[size++] = val;
 		return true;
 	}
-	bool resize(const unsigned int new_size) noexcept
-	{
-		return reserve(new_size) && (size = new_size) == new_size;
-	}
-	bool shrink_to_fit() noexcept
-	{
-		if (size != capacity)
-		{
-			destruct<__is_trivially_destructible(ItemType)>(items + size, items + capacity);
-			void *p = MMG.realloc(items, size * sizeof(ItemType));if (p == 0)return false;items = (ItemType*)p;
-			capacity = size;
-		}
-		return true;
-	}
-	inline bool push_back(const ItemType& v) noexcept { if (size >= capacity && !reserve_items())return false; items[size++] = v;return true; }
 	inline ItemType& operator[](const unsigned int i) noexcept { return items[i]; }
 	unsigned int size;
 	unsigned int capacity;
@@ -2424,39 +2435,21 @@ template <const int GrowFactor>
 class PlainVector<bool, GrowFactor>
 {
 private:
-	bool reserve_items() noexcept { unsigned int c = capacity << 5; if (GrowFactor >= 0) c += GrowFactor; else c *= -GrowFactor; return reserve(c); }
+	bool inline _allocate(unsigned int** ptr, unsigned int& capacity, const unsigned int new_capacity) { typedef unsigned int Ty; if (new_capacity != capacity) { void *p = MMG.realloc(*ptr, new_capacity * sizeof(Ty));if (p == 0 && new_capacity != 0)return false;*ptr = (Ty*)p;capacity = new_capacity; }return true; }
+	inline void _deallocate(unsigned int** ptr) { MMG.free(*ptr);*ptr = 0; }
+	//void* operator new(size_t count) noexcept { return MMG.malloc(count); }
+	//void operator delete(void* p) noexcept { MMG.free(p); }
 public:
-	PlainVector() noexcept { ::memset(this, 0, sizeof(PlainVector)); }
-	PlainVector(const unsigned int count) noexcept { resize(count); }
-	~PlainVector() noexcept { if (items)MMG.free(items); }
-	bool reserve(const unsigned int new_cap) noexcept
-	{
-		unsigned int c = (new_cap + 31) >> 5;
-		if (c > capacity)
-		{
-			void *p = MMG.realloc(items, c * sizeof(unsigned int));if (p == 0)return false;items = (unsigned int*)p;
-			::memset(items + capacity, 0, (c - capacity) * sizeof(unsigned int));
-			capacity = c;
-		}
-		return true;
-	}
-	bool resize(const unsigned int new_size) noexcept
-	{
-		return reserve(new_size) && (size = new_size) == new_size;
-	}
-	bool shrink_to_fit() noexcept
-	{
-		unsigned int c = (size + 31) >> 5;
-		if (c != capacity)
-		{
-			void *p = MMG.realloc(items, c * sizeof(unsigned int));if (p == 0)return false;items = (unsigned int*)p;
-			capacity = c;
-		}
-	}
-	//static void* operator new(size_t count) noexcept { return MMG.malloc(count); }
-	//static void operator delete(void* p) noexcept { MMG.free(p); }
-	inline bool push_back(const bool b) noexcept { if (size >= (capacity << 5) && !reserve_items())return false;if (b)items[size >> 5] |= (1 << (size & 31));else items[size >> 5] &= ~(1 << (size & 31));size++; return true; }
-	inline bool operator[](const unsigned int i) noexcept { return items[i >> 5] & (1 << (i & 31)); }
+	PlainVector() noexcept : size(0), capacity(0), items(0) {}
+	PlainVector(const unsigned int count) noexcept : PlainVector() { resize(count); }
+	PlainVector(const unsigned int count, const bool val) noexcept : PlainVector() { resize(count, val); }
+	~PlainVector() noexcept { if (items)_deallocate(&items); }
+	bool reserve(const unsigned int new_cap) noexcept { unsigned int c = (new_cap + 31) >> 5;return c <= capacity || _allocate(&items, capacity, c); }
+	bool resize(const unsigned int new_size) noexcept { size = new_size; return reserve(new_size); }
+	bool resize(const unsigned int new_size, const bool val) noexcept { if (new_size != size) { if (new_size > size) { if (!reserve(new_size))return false;unsigned int v = val ? ~0U : 0U, i = size >> 5, m;if (size) { m = ~0U >> (32 - (size & 31));items[i] &= m;if (i == capacity - 1)m |= (~1U << ((new_size - 1) & 31));items[i++] |= v & ~m; }while (i < capacity)items[i++] = v; }size = new_size; }return true; }
+	bool shrink_to_fit() noexcept { return _allocate(&items, capacity, (size + 31) >> 5); }
+	inline bool push_back(const bool b) noexcept { if (size >= (capacity << 5) && reserve(size + GrowFactor))return false;if (b)items[size >> 5] |= (1U << (size & 31));else items[size >> 5] &= ~(1U << (size & 31));size++;return true; }
+	inline bool operator[](const unsigned int i) noexcept { return items[i >> 5] & (1U << (i & 31)); }
 	unsigned int size;
 	unsigned int capacity;
 	unsigned int *items;
@@ -2486,9 +2479,12 @@ private:
 
 
 
-//TODO: разобраться с new и delete (см. https://ru.wikipedia.org/wiki/New_(C%2B%2B))
 
 
+
+
+
+//index tree
 template <class ValueType>
 class PlainContainer16bit
 {
