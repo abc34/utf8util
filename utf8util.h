@@ -2365,7 +2365,7 @@ class PlainArray
 	template<> inline void _fill<true>(ItemType* first, ItemType* last, const ItemType& val) noexcept
 	{//NOTE: PlainArray::_fill() based on source code of the PlainVector::_Allocator::fill()
 		typedef ItemType Ty;
-		if (last - first < 8) { while (first < last)*first++ = val; }
+		if (last - first < 8) { while (first != last)*first++ = val; }
 		else
 		{
 			unsigned char* p = (unsigned char*)&val, c = *p, *end = p + sizeof(Ty); while (p != end && *p == c)p++;
@@ -2405,51 +2405,93 @@ public:
 	unsigned int items[(Capacity + 31) >> 5];
 };
 
+template<bool b> struct _bool_type { const enum { value = b }; };using _false_type = _bool_type<false>;using _true_type = _bool_type<true>;
+template<class _Tx, class _Ty> struct _is_same : _false_type {};template<class _Tx> struct _is_same<_Tx, _Tx> : _true_type {};
+template<class _T> struct _remove_cv { using type = _T; };template<class _T> struct _remove_cv<const _T> { using type = _T; }; template<class _T> struct _remove_cv<volatile _T> { using type = _T; };template<class _T> struct _remove_cv<const volatile _T> { using type = _T; };
+template<class _T> using _remove_cv_t = typename _remove_cv<_T>::type;
+template<class _T> struct _remove_ref { using type = _T; };template<class _T> struct _remove_ref<_T&> { using type = _T; }; template<class _T> struct _remove_ref<_T&&> { using type = _T; };
+template<class _T> using _remove_ref_t = typename _remove_ref<_T>::type;
+template<class _T> struct _is_array : _false_type {};template<class _T> struct _is_array<_T[]> : _true_type {};template<class _T, unsigned int N> struct _is_array<_T[N]> : _true_type {};
+template<class _T> struct _is_pointer : _false_type {};template<class _T> struct _is_pointer<_T*> : _true_type {};
+template<class _T> constexpr const bool is_pointer_type() { return _is_pointer<_T>::value; }
+template<class _T> constexpr const bool is_array_type() { return _is_array<_T>::value; }
+template<class _Tx, class _Ty> constexpr const bool is_same_type() { return _is_same<_Tx, _Ty>::value; }
+template<class _T> constexpr const bool is_mem_type()
+{
+	using T = _remove_cv_t<_remove_ref_t<_T>>;
+	return
+		is_same_type<T, char>() || is_same_type<T, wchar_t>() || is_same_type<T, char16_t>() || is_same_type<T, char32_t>() ||
+		is_same_type<T, signed char>() || is_same_type<T, unsigned char>() || is_same_type<T, short>() || is_same_type<T, unsigned short>() ||
+		is_same_type<T, int>() || is_same_type<T, unsigned int>() || is_same_type<T, long>() || is_same_type<T, unsigned long>() ||
+		is_same_type<T, long long>() || is_same_type<T, unsigned long long>() || is_same_type<T, bool>() ||
+		is_same_type<T, float>() || is_same_type<T, double>() || is_same_type<T, long double>() ||
+		_is_array<T>::value || _is_pointer<T>::value;
+};
+
 //NOTE: use "const" qualifier arguments and functions ?
-template <class ItemType, const int GrowFactor = 16>
+template<typename Ty> class Allocator
+{
+public:
+	Allocator() = default;
+	~Allocator() = default;
+	//construct uninitialized item
+	template<const bool b = __is_trivially_constructible(Ty)> inline void construct_uninitialized_item(Ty*) noexcept;
+	template<> inline void construct_uninitialized_item<false>(Ty* items) noexcept { new(items)Ty(); }
+	template<> inline void construct_uninitialized_item<true>(Ty* items) noexcept {}
+	//default constructor
+	template<const bool b = __is_trivially_constructible(Ty)>inline void construct(Ty*, Ty*) noexcept;
+	template<> inline void construct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)new(first)Ty(); }
+	template<> inline void construct<true>(Ty*, Ty*) noexcept {}
+	//copy constructor
+	template<const bool b = __is_trivially_constructible(Ty, const Ty&)>inline void construct(Ty*, Ty*, const Ty&) noexcept;
+	template<> inline void construct<false>(Ty* first, Ty* last, const Ty& val) noexcept { for (;first != last;++first)new(first)Ty(val); }
+	template<> inline void construct<true>(Ty* first, Ty* last, const Ty& val) noexcept { fill(first, last, val); }
+	//destructor
+	template<const bool b = __is_trivially_destructible(Ty)>inline void destruct(Ty*, Ty*) noexcept;
+	template<> inline void destruct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)first->~Ty(); }
+	template<> inline void destruct<true>(Ty*, Ty*) noexcept {}
+	bool inline allocate(Ty** ptr, unsigned int& capacity, const unsigned int new_capacity) { if (new_capacity != capacity) { void *p = MMG.realloc(*ptr, new_capacity * sizeof(Ty));if (p == 0 && new_capacity != 0)return false;*ptr = (Ty*)p;capacity = new_capacity; }return true; }
+	inline void deallocate(Ty** ptr) { MMG.free(*ptr);*ptr = 0; }
+	//fill
+	template<const bool b = __is_trivially_assignable(Ty&, const Ty&)> inline void fill(Ty*, Ty*, const Ty&) noexcept;
+	template<> inline void fill<false>(Ty* first, Ty* last, const Ty& val) noexcept { while (first != last)*first++ = val; }
+	template<> inline void fill<true>(Ty* first, Ty* last, const Ty& val) noexcept
+	{
+		if (last - first < 8) { while (first != last)*first++ = val; }
+		else
+		{
+			unsigned char* p = (unsigned char*)&val, c = *p, *end = p + sizeof(Ty); while (p != end && *p == c)p++;
+			if (p == end) { ::memset(first, c, (((char*)last) - ((char*)first))); }
+			else
+			{
+				const Ty* src = first;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;
+				while (last - first >= first - src) { ::memcpy(first, src, ((char*)first) - ((char*)src));first += first - src; }if (first != last) { ::memcpy(first, src, ((char*)last) - ((char*)first)); }
+			}
+		}
+	}
+	//template<class T> inline void fill(T* first, T* last, const T val) noexcept;
+	//template<class T> inline void fill<true>(char* first, char* last, const char& val) noexcept { ::memset(first, val, last - first); }
+	//template<class T> inline void fill<true>(unsigned char* first, unsigned char* last, const unsigned char& val) noexcept { ::memset(first, val, last - first); }
+	//template<class T> inline void fill<true>(signed char* first, signed char* last, const signed char& val) noexcept { ::memset(first, val, last - first); }
+	//#define _cpy(T)	{\
+//					if (last - first < 8) { while (first != last)*first++ = val; } else {\
+//					const T* src = first;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val; \
+//					while (last - first >= first - src) { ::memcpy(first, src, ((char*)first) - ((char*)src));first += first - src; }if (first != last) { ::memcpy(first, src, ((char*)last) - ((char*)first)); } } \
+//				}
+//	inline void fill(const char* first, const char* last, const char val) noexcept { ::memset(first, val, last - first); }
+//	inline void fill(const unsigned char* first, const unsigned char* last, const unsigned char val) noexcept { ::memset(first, val, last - first); }
+//	inline void fill(const signed char* first, const signed char* last, const signed char val) noexcept { ::memset(first, val, last - first); }
+//	inline void fill(const int* first, const int* last, const int val) noexcept { if (((unsigned int)val) < 0x100)::memset(first, val, (last - first) * sizeof(int)); else _cpy(int) }
+//	inline void fill(const unsigned int* first, const unsigned int* last, const unsigned int val) noexcept { if (((unsigned int)val) < 0x100)::memset(first, val, (last - first) * sizeof(unsigned int)); else _cpy(unsigned int) }
+//#undef _cpy
+};
+
+
+template <class ItemType, const int GrowFactor = 16, class Allocator = Allocator<ItemType>>
 class PlainVector
 {
 private:
-	template<typename Ty> class _Allocator
-	{
-	public:
-		//construct uninitialized item
-		template<const bool b = __is_trivially_constructible(Ty)> inline void construct_uninitialized_item(Ty*) noexcept;
-		template<> inline void construct_uninitialized_item<false>(Ty* items) noexcept { new(items)Ty(); }
-		template<> inline void construct_uninitialized_item<true>(Ty* items) noexcept {}
-		//default constructor
-		template<const bool b = __is_trivially_constructible(Ty)>inline void construct(Ty*, Ty*) noexcept;
-		template<> inline void construct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)new(first)Ty(); }
-		template<> inline void construct<true>(Ty*, Ty*) noexcept {}
-		//copy constructor
-		template<const bool b = __is_trivially_constructible(Ty, const Ty&)>inline void construct(Ty*, Ty*, const Ty&) noexcept;
-		template<> inline void construct<false>(Ty* first, Ty* last, const Ty& val) noexcept { for (;first != last;++first)new(first)Ty(val); }
-		template<> inline void construct<true>(Ty* first, Ty* last, const Ty& val) noexcept { fill(first, last, val); }
-		//destructor
-		template<const bool b = __is_trivially_destructible(Ty)>inline void destruct(Ty*, Ty*) noexcept;
-		template<> inline void destruct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)first->~Ty(); }
-		template<> inline void destruct<true>(Ty*, Ty*) noexcept {}
-		bool inline allocate(Ty** ptr, unsigned int& capacity, const unsigned int new_capacity) { if (new_capacity != capacity) { void *p = MMG.realloc(*ptr, new_capacity * sizeof(Ty));if (p == 0 && new_capacity != 0)return false;*ptr = (Ty*)p;capacity = new_capacity; }return true; }
-		inline void deallocate(Ty** ptr) { MMG.free(*ptr);*ptr = 0; }
-		//fill
-		template<const bool b = __is_trivially_assignable(Ty&, const Ty&)> inline void fill(Ty*, Ty*, const Ty&) noexcept;
-		template<> inline void fill<false>(Ty* first, Ty* last, const Ty& val) noexcept { while (first != last)*first++ = val; }
-		template<> inline void fill<true>(Ty* first, Ty* last, const Ty& val) noexcept
-		{
-			if (last - first < 8) { while (first != last)*first++ = val; }
-			else
-			{
-				unsigned char* p = (unsigned char*)&val, c = *p, *end = p + sizeof(Ty); while (p != end && *p == c)p++;
-				if (p == end) { ::memset(first, c, (((char*)last) - ((char*)first))); }
-				else
-				{
-					const Ty* src = first;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;
-					while (last - first >= first - src) { ::memcpy(first, src, ((char*)first) - ((char*)src));first += first - src; }if (first != last) { ::memcpy(first, src, ((char*)last) - ((char*)first)); }
-				}
-			}
-		}
-	};
-	_Allocator<ItemType> _alloc;
+	Allocator _alloc;
 	//void* operator new(size_t count) noexcept { return MMG.malloc(count); }
 	//void operator delete(void* p) noexcept { MMG.free(p); }
 public:
@@ -2474,22 +2516,21 @@ public:
 	ItemType* items;
 };
 template <const int GrowFactor>
-class PlainVector<bool, GrowFactor>
+class PlainVector<bool, GrowFactor, Allocator<unsigned int>>
 {
 private:
-	bool inline _allocate(unsigned int** ptr, unsigned int& capacity, const unsigned int new_capacity) { typedef unsigned int Ty; if (new_capacity != capacity) { void *p = MMG.realloc(*ptr, new_capacity * sizeof(Ty));if (p == 0 && new_capacity != 0)return false;*ptr = (Ty*)p;capacity = new_capacity; }return true; }
-	inline void _deallocate(unsigned int** ptr) { MMG.free(*ptr);*ptr = 0; }
+	Allocator<unsigned int> _alloc;
 	//void* operator new(size_t count) noexcept { return MMG.malloc(count); }
 	//void operator delete(void* p) noexcept { MMG.free(p); }
 public:
 	PlainVector() noexcept : size(0), capacity(0), items(0) {}
 	PlainVector(const unsigned int count) noexcept : PlainVector() { resize(count); }
 	PlainVector(const unsigned int count, const bool val) noexcept : PlainVector() { resize(count, val); }
-	~PlainVector() noexcept { if (items)_deallocate(&items); }
-	bool reserve(const unsigned int new_cap) noexcept { unsigned int c = (new_cap + 31) >> 5;return c <= capacity || _allocate(&items, capacity, c); }
+	~PlainVector() noexcept { if (items)_alloc._deallocate(&items); }
+	bool reserve(const unsigned int new_cap) noexcept { unsigned int c = (new_cap + 31) >> 5;return c <= capacity || _alloc.allocate(&items, capacity, c); }
 	bool resize(const unsigned int new_size) noexcept { size = new_size; return reserve(new_size); }
 	bool resize(const unsigned int new_size, const bool val) noexcept { if (new_size != size) { if (new_size > size) { if (!reserve(new_size))return false;unsigned int v = val ? ~0U : 0U, i = size >> 5, m;if (size) { m = ~0U >> (32 - (size & 31));items[i] &= m;if (i == capacity - 1)m |= (~1U << ((new_size - 1) & 31));items[i++] |= v & ~m; }while (i < capacity)items[i++] = v; }size = new_size; }return true; }
-	bool shrink_to_fit() noexcept { return _allocate(&items, capacity, (size + 31) >> 5); }
+	bool shrink_to_fit() noexcept { return _alloc.allocate(&items, capacity, (size + 31) >> 5); }
 	void fill(const bool b) noexcept { ::memset(items, b ? 0xFF : 0x00, ((size + 31) >> 5) * sizeof(unsigned int)); }
 	inline bool push_back(const bool b) noexcept { if (size >= (capacity << 5) && reserve(size + GrowFactor))return false;if (b)items[size >> 5] |= (1U << (size & 31));else items[size >> 5] &= ~(1U << (size & 31));size++;return true; }
 	inline bool operator[](const unsigned int i) noexcept { return items[i >> 5] & (1U << (i & 31)); }
@@ -2527,16 +2568,16 @@ private:
 
 
 
-//index tree
+//indexed tree
 template <class ValueType>
 class PlainContainer16bit
 {
-
+private:
 	template <class ValueType>
 	class PlainContainer8bit
 	{
 	public:
-		PlainContainer8bit() noexcept : inx(0) { /*::memset(inx.items, 0, sizeof(inx.items));*/ }
+		PlainContainer8bit() noexcept : inx(0) {}
 		~PlainContainer8bit() {}
 		static void* operator new(size_t count) noexcept { return MMG.malloc(count); }
 		static void operator delete(void* p) noexcept { MMG.free(p); }
@@ -2553,8 +2594,8 @@ class PlainContainer16bit
 public:
 	typedef PlainContainer8bit<ValueType> PC8;
 	typedef unique_ptr<PC8> UPtr;
-	PlainContainer16bit() noexcept : inx(0) { /*::memset(inx.items, 0, sizeof(inx.items));*/ }
-	~PlainContainer16bit() { }
+	PlainContainer16bit() noexcept : inx(0) {}
+	~PlainContainer16bit() = default;
 	bool push_back(const unsigned short key, const ValueType& v) noexcept
 	{
 		unsigned char k1 = key >> 8, k0 = key & 255; PC8* p;
