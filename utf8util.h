@@ -2405,6 +2405,9 @@ public:
 	unsigned int items[(Capacity + 31) >> 5];
 };
 
+
+
+
 template<bool b> struct _bool_type { const enum { value = b }; };using _false_type = _bool_type<false>;using _true_type = _bool_type<true>;
 template<class _Tx, class _Ty> struct _is_same : _false_type {};template<class _Tx> struct _is_same<_Tx, _Tx> : _true_type {};
 template<class _T> struct _remove_cv { using type = _T; };template<class _T> struct _remove_cv<const _T> { using type = _T; }; template<class _T> struct _remove_cv<volatile _T> { using type = _T; };template<class _T> struct _remove_cv<const volatile _T> { using type = _T; };
@@ -2450,6 +2453,7 @@ public:
 	template<const bool b = __is_trivially_destructible(Ty)>inline void destruct(Ty*, Ty*) noexcept;
 	template<> inline void destruct<false>(Ty* first, Ty* last) noexcept { for (;first != last;++first)first->~Ty(); }
 	template<> inline void destruct<true>(Ty*, Ty*) noexcept {}
+	//allocator and deallocator functions
 	bool inline allocate(Ty** ptr, unsigned int& capacity, const unsigned int new_capacity) { if (new_capacity != capacity) { void *p = MMG.realloc(*ptr, new_capacity * sizeof(Ty));if (p == 0 && new_capacity != 0)return false;*ptr = (Ty*)p;capacity = new_capacity; }return true; }
 	inline void deallocate(Ty** ptr) { MMG.free(*ptr);*ptr = 0; }
 	//fill
@@ -2469,21 +2473,9 @@ public:
 			}
 		}
 	}
-	//template<class T> inline void fill(T* first, T* last, const T val) noexcept;
-	//template<class T> inline void fill<true>(char* first, char* last, const char& val) noexcept { ::memset(first, val, last - first); }
-	//template<class T> inline void fill<true>(unsigned char* first, unsigned char* last, const unsigned char& val) noexcept { ::memset(first, val, last - first); }
-	//template<class T> inline void fill<true>(signed char* first, signed char* last, const signed char& val) noexcept { ::memset(first, val, last - first); }
-	//#define _cpy(T)	{\
-//					if (last - first < 8) { while (first != last)*first++ = val; } else {\
-//					const T* src = first;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val;*first++ = val; \
-//					while (last - first >= first - src) { ::memcpy(first, src, ((char*)first) - ((char*)src));first += first - src; }if (first != last) { ::memcpy(first, src, ((char*)last) - ((char*)first)); } } \
-//				}
-//	inline void fill(const char* first, const char* last, const char val) noexcept { ::memset(first, val, last - first); }
-//	inline void fill(const unsigned char* first, const unsigned char* last, const unsigned char val) noexcept { ::memset(first, val, last - first); }
-//	inline void fill(const signed char* first, const signed char* last, const signed char val) noexcept { ::memset(first, val, last - first); }
-//	inline void fill(const int* first, const int* last, const int val) noexcept { if (((unsigned int)val) < 0x100)::memset(first, val, (last - first) * sizeof(int)); else _cpy(int) }
-//	inline void fill(const unsigned int* first, const unsigned int* last, const unsigned int val) noexcept { if (((unsigned int)val) < 0x100)::memset(first, val, (last - first) * sizeof(unsigned int)); else _cpy(unsigned int) }
-//#undef _cpy
+	inline void fill(char* first, char* last, char val) noexcept { ::memset(first, val, last - first); }
+	inline void fill(unsigned char* first, unsigned char* last, unsigned char val) noexcept { ::memset(first, val, last - first); }
+	inline void fill(signed char* first, signed char* last, signed char val) noexcept { ::memset(first, val, last - first); }
 };
 
 
